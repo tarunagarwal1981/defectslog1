@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { PlusCircle, FileText, ChevronDown, ChevronRight } from 'lucide-react';
+import { PlusCircle, FileText } from 'lucide-react';
 import ExportButton from './ui/ExportButton';
 import { exportToCSV } from '../utils/exportToCSV';
 
@@ -52,11 +52,9 @@ const DefectRow = ({ defect, index, onEditDefect }) => {
             onClick={toggleExpand}
             className="p-0.5 hover:bg-white/10 rounded transition-colors"
           >
-            {isExpanded ? (
-              <ChevronDown className="h-3.5 w-3.5 text-[#3BADE5]" />
-            ) : (
-              <ChevronRight className="h-3.5 w-3.5 text-[#3BADE5]" />
-            )}
+            <span className={`inline-block transition-transform duration-200 text-[#3BADE5] ${isExpanded ? 'rotate-0' : '-rotate-90'}`}>
+              ▼
+            </span>
           </button>
         </td>
         <td className="px-3 py-1.5">{index + 1}</td>
@@ -97,15 +95,10 @@ const DefectRow = ({ defect, index, onEditDefect }) => {
         <td className="px-3 py-1.5" onClick={() => onEditDefect(defect)}>
           {defect['Date Completed'] ? new Date(defect['Date Completed']).toLocaleDateString() : '-'}
         </td>
-        <td className="px-3 py-1.5" onClick={() => onEditDefect(defect)}>
-          {defect.associated_files?.length > 0 && (
-            <FileText className="h-3.5 w-3.5 text-[#3BADE5] hover:text-[#3BADE5]/80" />
-          )}
-        </td>
       </tr>
       {isExpanded && (
         <tr className="bg-[#132337]/50">
-          <td colSpan="11" className="px-8 py-3 border-b border-white/10">
+          <td colSpan="10" className="px-8 py-3 border-b border-white/10">
             <div className="grid gap-3">
               <div>
                 <div className="text-xs font-medium text-white/80 mb-1">Description</div>
@@ -185,17 +178,16 @@ const DefectsTable = ({
               <th className="px-3 py-2 text-left font-semibold text-[#f4f4f4] opacity-90">Action Planned</th>
               <th className="px-3 py-2 text-left font-semibold text-[#f4f4f4] opacity-90 w-24">Reported</th>
               <th className="px-3 py-2 text-left font-semibold text-[#f4f4f4] opacity-90 w-24">Completed</th>
-              <th className="px-3 py-2 text-left font-semibold text-[#f4f4f4] opacity-90 w-12">Files</th>
             </tr>
           </thead>
           <tbody className="text-[#f4f4f4]">
             {loading ? (
               <tr>
-                <td colSpan="11" className="px-3 py-2 text-center">Loading...</td>
+                <td colSpan="10" className="px-3 py-2 text-center">Loading...</td>
               </tr>
             ) : data.length === 0 ? (
               <tr>
-                <td colSpan="11" className="px-3 py-2 text-center">No defects found</td>
+                <td colSpan="10" className="px-3 py-2 text-center">No defects found</td>
               </tr>
             ) : (
               data.map((defect, index) => (
