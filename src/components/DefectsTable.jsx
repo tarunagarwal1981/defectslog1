@@ -1,5 +1,5 @@
-import React from 'react';
-import { PlusCircle, FileText } from 'lucide-react';
+import React, { useState } from 'react';
+import { PlusCircle, FileText, ChevronDown, ChevronRight } from 'lucide-react';
 import ExportButton from './ui/ExportButton';
 import { exportToCSV } from '../utils/exportToCSV';
 
@@ -34,6 +34,108 @@ const CRITICALITY_COLORS = {
     bg: 'bg-blue-500/20',
     text: 'text-blue-300'
   }
+};
+
+const DefectRow = ({ defect, index, onEditDefect }) => {
+  const [isExpanded, setIsExpanded] = useState(false);
+
+  const toggleExpand = (e) => {
+    e.stopPropagation();
+    setIsExpanded(!isExpanded);
+  };
+
+  return (
+    <>
+      <tr className="table-hover-row cursor-pointer border-b border-white/10 hover:bg-white/5">
+        <td className="px-3 py-1.5">
+          <button
+            onClick={toggleExpand}
+            className="p-0.5 hover:bg-white/10 rounded transition-colors"
+          >
+            {isExpanded ? (
+              <ChevronDown className="h-3.5 w-3.5 text-[#3BADE5]" />
+            ) : (
+              <ChevronRight className="h-3.5 w-3.5 text-[#3BADE5]" />
+            )}
+          </button>
+        </td>
+        <td className="px-3 py-1.5">{index + 1}</td>
+        <td className="px-3 py-1.5" onClick={() => onEditDefect(defect)}>
+          {defect.vessel_name}
+        </td>
+        <td className="px-3 py-1.5" onClick={() => onEditDefect(defect)}>
+          <span className={`inline-flex items-center px-2 py-0.5 rounded-full text-[10px] 
+            ${STATUS_COLORS[defect['Status (Vessel)']].bg} 
+            ${STATUS_COLORS[defect['Status (Vessel)']].text}
+            ${STATUS_COLORS[defect['Status (Vessel)']].glow}
+            transition-all duration-200`}
+          >
+            <span className="w-1 h-1 rounded-full bg-current mr-1"></span>
+            {defect['Status (Vessel)']}
+          </span>
+        </td>
+        <td className="px-3 py-1.5" onClick={() => onEditDefect(defect)}>
+          <span className={`inline-block px-2 py-0.5 rounded-full text-[10px] 
+            ${CRITICALITY_COLORS[defect.Criticality]?.bg || 'bg-gray-500/20'} 
+            ${CRITICALITY_COLORS[defect.Criticality]?.text || 'text-gray-300'}`}
+          >
+            {defect.Criticality || 'N/A'}
+          </span>
+        </td>
+        <td className="px-3 py-1.5 truncate max-w-[150px]" title={defect.Equipments} onClick={() => onEditDefect(defect)}>
+          {defect.Equipments}
+        </td>
+        <td className="px-3 py-1.5 truncate max-w-[200px]" title={defect.Description} onClick={() => onEditDefect(defect)}>
+          {defect.Description}
+        </td>
+        <td className="px-3 py-1.5 truncate max-w-[200px]" title={defect['Action Planned']} onClick={() => onEditDefect(defect)}>
+          {defect['Action Planned']}
+        </td>
+        <td className="px-3 py-1.5" onClick={() => onEditDefect(defect)}>
+          {defect['Date Reported'] ? new Date(defect['Date Reported']).toLocaleDateString() : '-'}
+        </td>
+        <td className="px-3 py-1.5" onClick={() => onEditDefect(defect)}>
+          {defect['Date Completed'] ? new Date(defect['Date Completed']).toLocaleDateString() : '-'}
+        </td>
+        <td className="px-3 py-1.5" onClick={() => onEditDefect(defect)}>
+          {defect.associated_files?.length > 0 && (
+            <FileText className="h-3.5 w-3.5 text-[#3BADE5] hover:text-[#3BADE5]/80" />
+          )}
+        </td>
+      </tr>
+      {isExpanded && (
+        <tr className="bg-[#132337]/50">
+          <td colSpan="11" className="px-8 py-3 border-b border-white/10">
+            <div className="grid gap-3">
+              <div>
+                <div className="text-xs font-medium text-white/80 mb-1">Description</div>
+                <div className="text-xs text-white/90">{defect.Description || '-'}</div>
+              </div>
+              <div>
+                <div className="text-xs font-medium text-white/80 mb-1">Action Planned</div>
+                <div className="text-xs text-white/90">{defect['Action Planned'] || '-'}</div>
+              </div>
+              <div>
+                <div className="text-xs font-medium text-white/80 mb-1">Comments</div>
+                <div className="text-xs text-white/90">{defect.Comments || '-'}</div>
+              </div>
+              {defect.associated_files?.length > 0 && (
+                <div>
+                  <div className="text-xs font-medium text-white/80 mb-1">Files</div>
+                  <div className="flex items-center gap-2">
+                    <FileText className="h-3.5 w-3.5 text-[#3BADE5]" />
+                    <span className="text-xs text-white/90">
+                      {defect.associated_files.length} file(s) attached
+                    </span>
+                  </div>
+                </div>
+              )}
+            </div>
+          </td>
+        </tr>
+      )}
+    </>
+  );
 };
 
 const DefectsTable = ({ 
@@ -73,6 +175,7 @@ const DefectsTable = ({
         <table className="w-full text-xs">
           <thead>
             <tr className="bg-[#132337] border-b border-white/10">
+              <th className="px-3 py-2 text-left font-semibold text-[#f4f4f4] opacity-90 w-8"></th>
               <th className="px-3 py-2 text-left font-semibold text-[#f4f4f4] opacity-90 w-12">#</th>
               <th className="px-3 py-2 text-left font-semibold text-[#f4f4f4] opacity-90 w-28">Vessel</th>
               <th className="px-3 py-2 text-left font-semibold text-[#f4f4f4] opacity-90 w-24">Status</th>
@@ -80,7 +183,6 @@ const DefectsTable = ({
               <th className="px-3 py-2 text-left font-semibold text-[#f4f4f4] opacity-90 w-32">Equipment</th>
               <th className="px-3 py-2 text-left font-semibold text-[#f4f4f4] opacity-90">Description</th>
               <th className="px-3 py-2 text-left font-semibold text-[#f4f4f4] opacity-90">Action Planned</th>
-              <th className="px-3 py-2 text-left font-semibold text-[#f4f4f4] opacity-90 w-36">Comments</th>
               <th className="px-3 py-2 text-left font-semibold text-[#f4f4f4] opacity-90 w-24">Reported</th>
               <th className="px-3 py-2 text-left font-semibold text-[#f4f4f4] opacity-90 w-24">Completed</th>
               <th className="px-3 py-2 text-left font-semibold text-[#f4f4f4] opacity-90 w-12">Files</th>
@@ -97,58 +199,12 @@ const DefectsTable = ({
               </tr>
             ) : (
               data.map((defect, index) => (
-                <tr
+                <DefectRow
                   key={defect.id}
-                  onClick={() => onEditDefect(defect)}
-                  className="table-hover-row cursor-pointer border-b border-white/10 hover:bg-white/5"
-                >
-                  <td className="px-3 py-1.5">{index + 1}</td>
-                  <td className="px-3 py-1.5">{defect.vessel_name}</td>
-                  <td className="px-3 py-1.5">
-                    <span className={`inline-flex items-center px-2 py-0.5 rounded-full text-[10px] 
-                      ${STATUS_COLORS[defect['Status (Vessel)']].bg} 
-                      ${STATUS_COLORS[defect['Status (Vessel)']].text}
-                      ${STATUS_COLORS[defect['Status (Vessel)']].glow}
-                      transition-all duration-200`}
-                    >
-                      <span className="w-1 h-1 rounded-full bg-current mr-1"></span>
-                      {defect['Status (Vessel)']}
-                    </span>
-                  </td>
-                  <td className="px-3 py-1.5">
-                    <span className={`inline-block px-2 py-0.5 rounded-full text-[10px] 
-                      ${CRITICALITY_COLORS[defect.Criticality]?.bg || 'bg-gray-500/20'} 
-                      ${CRITICALITY_COLORS[defect.Criticality]?.text || 'text-gray-300'}`}
-                    >
-                      {defect.Criticality || 'N/A'}
-                    </span>
-                  </td>
-                  <td className="px-3 py-1.5 truncate max-w-[150px]" title={defect.Equipments}>
-                    {defect.Equipments}
-                  </td>
-                  <td className="px-3 py-1.5 truncate max-w-[200px]" title={defect.Description}>
-                    {defect.Description}
-                  </td>
-                  <td className="px-3 py-1.5 truncate max-w-[200px]" title={defect['Action Planned']}>
-                    {defect['Action Planned']}
-                  </td>
-                  <td className="px-3 py-1.5 truncate max-w-[150px]" title={defect.Comments}>
-                    {defect.Comments || '-'}
-                  </td>
-                  <td className="px-3 py-1.5">
-                    {defect['Date Reported'] ? new Date(defect['Date Reported']).toLocaleDateString() : '-'}
-                  </td>
-                  <td className="px-3 py-1.5">
-                    {defect['Date Completed'] ? new Date(defect['Date Completed']).toLocaleDateString() : '-'}
-                  </td>
-                  <td className="px-3 py-1.5">
-                    {defect.associated_files?.length > 0 && (
-                      <span className="inline-flex items-center">
-                        <FileText className="h-3.5 w-3.5 text-[#3BADE5] hover:text-[#3BADE5]/80" />
-                      </span>
-                    )}
-                  </td>
-                </tr>
+                  defect={defect}
+                  index={index}
+                  onEditDefect={onEditDefect}
+                />
               ))
             )}
           </tbody>
