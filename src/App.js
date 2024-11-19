@@ -1,7 +1,6 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { ToastProvider } from './components/ui/toast';
 import { useToast } from './components/ui/use-toast';
-import { AlertDialog, AlertDialogContent } from './components/ui/alert-dialog';
 import Auth from './components/Auth';
 import Header from './components/Header';
 import StatsCards from './components/StatsCards';
@@ -12,11 +11,35 @@ import ChatBot from './components/ChatBot/ChatBot';
 import { supabase } from './supabaseClient';
 import OfflineSync from './services/OfflineSync';
 
+// Utility function for fetching user's vessels
+const getUserVessels = async (userId) => {
+  try {
+    const { data, error } = await supabase
+      .from('user_vessels')
+      .select(`
+        vessel_id,
+        vessels!inner (
+          vessel_id,
+          vessel_name
+        )
+      `)
+      .eq('user_id', userId);
+
+    if (error) throw error;
+    return data;
+  } catch (error) {
+    console.error('Error fetching user vessels:', error);
+    throw error;
+  }
+};
+
 function App() {
   const { toast } = useToast();
   
-  // State Management
+  // User and auth states
   const [session, setSession] = useState(null);
+  
+  // Data states
   const [data, setData] = useState([]);
   const [assignedVessels, setAssignedVessels] = useState([]);
   const [vesselNames, setVesselNames] = useState({});
@@ -24,7 +47,7 @@ function App() {
   const [isPdfGenerating, setIsPdfGenerating] = useState(false);
   const [dataInitialized, setDataInitialized] = useState(false);
   
-  // Filter states
+  // Filter states - updated for array of vessels
   const [currentVessel, setCurrentVessel] = useState([]);
   const [searchTerm, setSearchTerm] = useState('');
   const [statusFilter, setStatusFilter] = useState('');
@@ -34,71 +57,46 @@ function App() {
   const [isDefectDialogOpen, setIsDefectDialogOpen] = useState(false);
   const [currentDefect, setCurrentDefect] = useState(null);
 
-  // Offline sync states
+  // Offline states
   const [offlineSync] = useState(() => new OfflineSync());
   const [isOnline, setIsOnline] = useState(navigator.onLine);
   const [isSyncing, setIsSyncing] = useState(false);
   const [pendingSyncCount, setPendingSyncCount] = useState(0);
 
-  // Initialize app with auth and data loading
+  // Initialize auth listener
   useEffect(() => {
     const initializeApp = async () => {
-      try {
-        // Get initial session
-        const { data: { session } } = await supabase.auth.getSession();
-        setSession(session);
-        
-        if (session?.user?.id) {
-          await loadUserData(session.user.id);
-        }
-        
-      } catch (error) {
-        console.error('Error initializing app:', error);
-        toast({
-          title: "Initialization Error",
-          description: "Failed to start app properly. Please refresh.",
-          variant: "destructive",
-        });
-      } finally {
-        setDataInitialized(true);
+      const { data: { session } } = await supabase.auth.getSession();
+      setSession(session);
+      
+      if (session?.user?.id) {
+        await loadData(session.user.id);
       }
+      
+      setDataInitialized(true);
     };
 
     initializeApp();
 
-    // Set up auth state listener
     const { data: { subscription } } = supabase.auth.onAuthStateChange(async (_event, session) => {
       setSession(session);
       if (session?.user?.id) {
-        await loadUserData(session.user.id);
-      } else {
-        // Clear data on logout
-        setData([]);
-        setAssignedVessels([]);
-        setVesselNames({});
+        await loadData(session.user.id);
       }
     });
 
     return () => subscription.unsubscribe();
   }, []);
 
-  // Load user data function
-  const loadUserData = async (userId) => {
+ // 3. Add this new loadData function after your useEffect:
+  const loadData = async (userId) => {
     try {
       setLoading(true);
 
-      // First try to load cached data
-      const cachedData = await offlineSync.getInitialData();
-      if (cachedData) {
-        const { defects, vessels } = cachedData;
-        if (defects?.length) setData(defects);
-        if (vessels) {
-          setAssignedVessels(vessels.map(v => v.vessel_id));
-          setVesselNames(vessels.reduce((acc, v) => {
-            acc[v.vessel_id] = v.vessel_name;
-            return acc;
-          }, {}));
-        }
+      // Load cached data first
+      const cachedDefects = await offlineSync.getDefects();
+      if (cachedDefects?.length) {
+        setData(cachedDefects);
       }
 
       // Get user's vessels
@@ -112,7 +110,6 @@ function App() {
 
       if (vesselError) throw vesselError;
 
-      // Process vessel data
       const vesselIds = userVessels.map(v => v.vessel_id);
       const vesselsMap = userVessels.reduce((acc, v) => {
         if (v.vessels) {
@@ -124,7 +121,7 @@ function App() {
       setAssignedVessels(vesselIds);
       setVesselNames(vesselsMap);
 
-      // If online, fetch fresh defects
+      // Fetch defects if online
       if (navigator.onLine) {
         const { data: defects, error: defectsError } = await supabase
           .from('defects register')
@@ -135,13 +132,97 @@ function App() {
         if (defectsError) throw defectsError;
 
         if (defects) {
-          // Store in IndexedDB for offline access
-          await offlineSync.storeData('defects', defects);
-          await offlineSync.storeData('vessels', 
-            vesselIds.map(id => ({ vessel_id: id, vessel_name: vesselsMap[id] }))
-          );
+          await offlineSync.storeData(defects);
           setData(defects);
         }
+      }
+
+    } catch (error) {
+      console.error('Error loading data:', error);
+      toast({
+        title: "Error",
+        description: "Failed to load data. Please try again.",
+        variant: "destructive",
+      });
+    } finally {
+      setLoading(false);
+    }
+  };  
+  
+  // Fetch user data
+
+const fetchUserData = useCallback(async () => {
+  if (!session?.user?.id) return;
+
+  try {
+    setLoading(true);
+    
+    // Get user's vessels with names
+    const userVessels = await getUserVessels(session.user.id);
+    
+    const vesselIds = userVessels.map(v => v.vessel_id);
+    const vesselsMap = userVessels.reduce((acc, v) => {
+      if (v.vessels) {
+        acc[v.vessel_id] = v.vessels.vessel_name;
+      }
+      return acc;
+    }, {});
+
+    // Fetch defects for assigned vessels
+    const { data: defects, error: defectsError } = await supabase
+      .from('defects register')
+      .select('*')
+      .in('vessel_id', vesselIds)
+      .order('Date Reported', { ascending: false });
+
+    if (defectsError) throw defectsError;
+
+    // Store fetched data in IndexedDB
+    if (defects) {
+      // Add localId to each defect before storing
+      const defectsWithLocalId = defects.map(defect => ({
+        ...defect,
+        localId: `server_${defect.id}`
+      }));
+      await offlineSync.storeData(defectsWithLocalId);
+    }
+
+    setAssignedVessels(vesselIds);
+    setVesselNames(vesselsMap);
+    setData(defects || []);
+    
+  } catch (error) {
+    console.error("Error fetching data:", error);
+    toast({
+      title: "Error",
+      description: error.message,
+      variant: "destructive",
+    });
+  } finally {
+    setLoading(false);
+  }
+}, [session?.user?.id, toast, offlineSync]);
+
+  // Load initial data and handle offline
+useEffect(() => {
+  const initializeData = async () => {
+    if (!session?.user) {
+      setData([]);
+      setAssignedVessels([]);
+      setVesselNames({});
+      return;
+    }
+
+    try {
+      // Try to load cached data first
+      const cachedDefects = await offlineSync.getDefects();
+      if (cachedDefects?.length) {
+        setData(cachedDefects);
+      }
+
+      // If online, fetch fresh data
+      if (navigator.onLine) {
+        await fetchUserData();
       }
 
       // Update pending sync count
@@ -149,16 +230,17 @@ function App() {
       setPendingSyncCount(pendingCount);
 
     } catch (error) {
-      console.error('Error loading user data:', error);
+      console.error('Error initializing data:', error);
       toast({
         title: "Error",
-        description: "Failed to load some data. Please try refreshing.",
+        description: "Some data may not be available offline",
         variant: "destructive",
       });
-    } finally {
-      setLoading(false);
     }
   };
+
+  initializeData();
+}, [session?.user, fetchUserData, offlineSync]);
 
   // Handle online/offline status
   useEffect(() => {
@@ -166,22 +248,18 @@ function App() {
       setIsOnline(true);
       setIsSyncing(true);
       try {
-        // Sync pending changes
-        const syncResult = await offlineSync.syncWithServer(supabase);
-        
-        if (syncResult.success) {
-          if (session?.user) {
-            await loadUserData(session.user.id);
-          }
-          toast({
-            title: "Sync Complete",
-            description: "All changes have been synchronized",
-          });
-        } else {
-          throw new Error(syncResult.error);
+        await offlineSync.syncWithServer();
+        if (session?.user) {
+          await fetchUserData();
         }
+        const pendingCount = await offlineSync.getPendingSyncCount();
+        setPendingSyncCount(pendingCount);
+        
+        toast({
+          title: "Back Online",
+          description: "All changes have been synchronized",
+        });
       } catch (error) {
-        console.error('Sync error:', error);
         toast({
           title: "Sync Error",
           description: "Some changes failed to sync. Will retry later.",
@@ -196,7 +274,7 @@ function App() {
       setIsOnline(false);
       toast({
         title: "Offline Mode",
-        description: "Changes will be saved locally and synced when online",
+        description: "Changes will be saved locally and synced when back online",
       });
     };
 
@@ -207,7 +285,7 @@ function App() {
       window.removeEventListener('online', handleOnline);
       window.removeEventListener('offline', handleOffline);
     };
-  }, [session, offlineSync]);
+  }, [offlineSync, fetchUserData, session, toast]);
 
   // Filter data
   const filteredData = React.useMemo(() => {
@@ -229,7 +307,7 @@ function App() {
     if (assignedVessels.length === 0) {
       toast({
         title: "Error",
-        description: "No vessels assigned. Please contact administrator.",
+        description: "No vessels assigned to you. Contact administrator.",
         variant: "destructive",
       });
       return;
@@ -237,6 +315,7 @@ function App() {
 
     setCurrentDefect({
       id: `temp-${Date.now()}`,
+      SNo: data.length + 1,
       vessel_id: '',
       Equipments: '',
       Description: '',
@@ -245,13 +324,14 @@ function App() {
       'Status (Vessel)': 'OPEN',
       'Date Reported': new Date().toISOString().split('T')[0],
       'Date Completed': '',
-      Comments: ''
     });
     setIsDefectDialogOpen(true);
   };
 
   // Handle saving defect
-  const handleSaveDefect = async (updatedDefect) => {
+ 
+
+const handleSaveDefect = async (updatedDefect) => {
     try {
       if (!assignedVessels.includes(updatedDefect.vessel_id)) {
         throw new Error("Not authorized for this vessel");
@@ -275,25 +355,15 @@ function App() {
       let savedDefect;
 
       if (navigator.onLine) {
-        // Online save
         const { data, error } = isNewDefect
-          ? await supabase
-              .from('defects register')
-              .insert([defectData])
-              .select()
-              .single()
-          : await supabase
-              .from('defects register')
-              .update(defectData)
-              .eq('id', updatedDefect.id)
-              .select()
-              .single();
+          ? await supabase.from('defects register').insert([defectData]).select().single()
+          : await supabase.from('defects register').update(defectData).eq('id', updatedDefect.id).select().single();
 
         if (error) throw error;
         savedDefect = data;
 
         // Update offline storage
-        await offlineSync.storeData('defects', [savedDefect]);
+        await offlineSync.storeData(savedDefect);
       } else {
         // Offline save
         savedDefect = {
@@ -301,11 +371,8 @@ function App() {
           id: isNewDefect ? `offline_${Date.now()}` : updatedDefect.id,
           _syncStatus: 'pending'
         };
-        await offlineSync.storeData('defects', [savedDefect]);
-        
-        // Update pending sync count
-        const pendingCount = await offlineSync.getPendingSyncCount();
-        setPendingSyncCount(pendingCount);
+        await offlineSync.storeData(savedDefect);
+        setPendingSyncCount(await offlineSync.getPendingSyncCount());
       }
 
       // Update local state
@@ -313,20 +380,16 @@ function App() {
         const newData = isNewDefect
           ? [savedDefect, ...prevData]
           : prevData.map(d => d.id === savedDefect.id ? savedDefect : d);
-        return newData.sort((a, b) => 
-          new Date(b['Date Reported']) - new Date(a['Date Reported'])
-        );
-      });
-
-      toast({
-        title: isNewDefect ? "Defect Added" : "Defect Updated",
-        description: navigator.onLine 
-          ? "Saved successfully" 
-          : "Saved offline - will sync when online",
+        return newData.sort((a, b) => new Date(b['Date Reported']) - new Date(a['Date Reported']));
       });
 
       setIsDefectDialogOpen(false);
       setCurrentDefect(null);
+
+      toast({
+        title: isNewDefect ? "Defect Added" : "Defect Updated",
+        description: navigator.onLine ? "Saved successfully" : "Saved offline - will sync when online",
+      });
 
     } catch (error) {
       console.error("Error saving defect:", error);
@@ -337,63 +400,49 @@ function App() {
       });
     }
   };
-
-  // Handle logout
   const handleLogout = async () => {
     try {
       const { error } = await supabase.auth.signOut();
       if (error) throw error;
-      
-      // Clear offline data
       await offlineSync.clearAll();
-      
-      // Clear local state
-      setData([]);
-      setAssignedVessels([]);
-      setVesselNames({});
-      setCurrentVessel([]);
-      setPendingSyncCount(0);
-      
     } catch (error) {
-      console.error("Logout error:", error);
+      console.error("Error logging out:", error);
       toast({
         title: "Error",
-        description: "Failed to log out properly",
+        description: error.message,
         variant: "destructive",
       });
     }
   };
 
-  // Handle PDF generation
-  const handleGeneratePdf = async () => {
+  // PDF Generation handler
+  const handleGeneratePdf = useCallback(async () => {
     setIsPdfGenerating(true);
     try {
-      // Your PDF generation logic here
       await new Promise(resolve => setTimeout(resolve, 1000));
     } catch (error) {
       toast({
         title: "Error",
-        description: "Failed to generate PDF",
+        description: "Failed to generate PDF. Please try again.",
         variant: "destructive",
       });
     } finally {
       setIsPdfGenerating(false);
     }
-  };
+  }, [toast]);
 
-  // Loading state
-  if (!dataInitialized) {
-    return (
-      <div className="min-h-screen bg-[#0B1623] flex items-center justify-center">
-        <div className="text-white text-lg">Loading Defect Manager...</div>
-      </div>
-    );
-  }
+  // Get vessel name for ChatBot
+  const getSelectedVesselsDisplay = () => {
+    if (currentVessel.length === 0) return 'All Vessels';
+    if (currentVessel.length === 1) {
+      return vesselNames[currentVessel[0]] || 'All Vessels';
+    }
+    return `${currentVessel.length} Vessels Selected`;
+  };
 
   return (
     <ToastProvider>
       <div className="min-h-screen bg-background">
-        {/* Offline Banner */}
         {!isOnline && (
           <div className="fixed top-0 left-0 right-0 bg-yellow-500 text-white px-4 py-2 text-center z-50">
             Working Offline 
@@ -401,16 +450,15 @@ function App() {
           </div>
         )}
         
-        {/* Syncing Dialog */}
         {isSyncing && (
-          <AlertDialog open={true}>
-            <AlertDialogContent className="bg-background text-white">
+          <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
+            <div className="bg-background p-4 rounded-lg shadow-lg">
               <div className="flex items-center gap-2">
                 <div className="animate-spin rounded-full h-4 w-4 border-2 border-white border-t-transparent" />
-                <span>Syncing changes...</span>
+                <span className="text-white">Syncing changes...</span>
               </div>
-            </AlertDialogContent>
-          </AlertDialog>
+            </div>
+          </div>
         )}
 
         {session ? (
@@ -442,9 +490,6 @@ function App() {
                   setIsDefectDialogOpen(true);
                 }}
                 loading={loading}
-                searchTerm={searchTerm}
-                statusFilter={statusFilter}
-                criticalityFilter={criticalityFilter}
               />
 
               <DefectDialog
@@ -464,11 +509,7 @@ function App() {
 
               <ChatBot 
                 data={filteredData}
-                vesselName={currentVessel.length === 0 
-                  ? 'All Vessels' 
-                  : currentVessel.length === 1 
-                    ? vesselNames[currentVessel[0]] 
-                    : `${currentVessel.length} Vessels Selected`}
+                vesselName={getSelectedVesselsDisplay()}
                 filters={{
                   status: statusFilter,
                   criticality: criticalityFilter,
