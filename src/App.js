@@ -353,7 +353,7 @@ useEffect(() => {
 
     setCurrentDefect({
       id: `temp-${Date.now()}`,
-      S. No: data.length + 1,
+      SNo: data.length + 1,
       vessel_id: '',
       Equipments: '',
       Description: '',
