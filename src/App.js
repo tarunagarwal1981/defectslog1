@@ -78,54 +78,58 @@ function App() {
   }, []);
 
   // Fetch user data
-  const fetchUserData = useCallback(async () => {
-    if (!session?.user?.id) return;
 
-    try {
-      setLoading(true);
-      
-      // Get user's vessels with names
-      const userVessels = await getUserVessels(session.user.id);
-      
-      // Extract vessel IDs and names
-      const vesselIds = userVessels.map(v => v.vessel_id);
-      const vesselsMap = userVessels.reduce((acc, v) => {
-        if (v.vessels) {
-          acc[v.vessel_id] = v.vessels.vessel_name;
-        }
-        return acc;
-      }, {});
+const fetchUserData = useCallback(async () => {
+  if (!session?.user?.id) return;
 
-      // Fetch defects for assigned vessels
-      const { data: defects, error: defectsError } = await supabase
-        .from('defects register')
-        .select('*')
-        .in('vessel_id', vesselIds)
-        .order('Date Reported', { ascending: false });
-
-      if (defectsError) throw defectsError;
-
-      // Store data for offline access
-      if (defects) {
-        await offlineSync.storeData('defects', defects);
-        await offlineSync.storeData('vessels', vesselsMap);
+  try {
+    setLoading(true);
+    
+    // Get user's vessels with names
+    const userVessels = await getUserVessels(session.user.id);
+    
+    const vesselIds = userVessels.map(v => v.vessel_id);
+    const vesselsMap = userVessels.reduce((acc, v) => {
+      if (v.vessels) {
+        acc[v.vessel_id] = v.vessels.vessel_name;
       }
+      return acc;
+    }, {});
 
-      setAssignedVessels(vesselIds);
-      setVesselNames(vesselsMap);
-      setData(defects || []);
-      
-    } catch (error) {
-      console.error("Error fetching data:", error);
-      toast({
-        title: "Error",
-        description: error.message,
-        variant: "destructive",
-      });
-    } finally {
-      setLoading(false);
+    // Fetch defects for assigned vessels
+    const { data: defects, error: defectsError } = await supabase
+      .from('defects register')
+      .select('*')
+      .in('vessel_id', vesselIds)
+      .order('Date Reported', { ascending: false });
+
+    if (defectsError) throw defectsError;
+
+    // Store fetched data in IndexedDB
+    if (defects) {
+      // Add localId to each defect before storing
+      const defectsWithLocalId = defects.map(defect => ({
+        ...defect,
+        localId: `server_${defect.id}`
+      }));
+      await offlineSync.storeData(defectsWithLocalId);
     }
-  }, [session?.user?.id, toast, offlineSync]);
+
+    setAssignedVessels(vesselIds);
+    setVesselNames(vesselsMap);
+    setData(defects || []);
+    
+  } catch (error) {
+    console.error("Error fetching data:", error);
+    toast({
+      title: "Error",
+      description: error.message,
+      variant: "destructive",
+    });
+  } finally {
+    setLoading(false);
+  }
+}, [session?.user?.id, toast, offlineSync]);
 
   // Load initial data and handle offline
 useEffect(() => {
