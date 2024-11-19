@@ -48,7 +48,7 @@ function App() {
   const [isPdfGenerating, setIsPdfGenerating] = useState(false);
   
   // Filter states
-  const [currentVessel, setCurrentVessel] = useState('');
+  const [currentVessel, setCurrentVessel] = useState([]);
   const [searchTerm, setSearchTerm] = useState('');
   const [statusFilter, setStatusFilter] = useState('');
   const [criticalityFilter, setCriticalityFilter] = useState('');
@@ -57,12 +57,12 @@ function App() {
   const [isDefectDialogOpen, setIsDefectDialogOpen] = useState(false);
   const [currentDefect, setCurrentDefect] = useState(null);
 
-  // Offline sync states
+  // Offline states
   const [offlineSync] = useState(() => new OfflineSync());
-  const [isInitialLoad, setIsInitialLoad] = useState(true);
   const [isOnline, setIsOnline] = useState(navigator.onLine);
   const [isSyncing, setIsSyncing] = useState(false);
   const [pendingSyncCount, setPendingSyncCount] = useState(0);
+  const [isInitialLoad, setIsInitialLoad] = useState(true);
 
   // Initialize auth listener
   useEffect(() => {
@@ -107,11 +107,10 @@ function App() {
 
       if (defectsError) throw defectsError;
 
-      // Save fetched data to IndexedDB
-      await offlineSync.storeData('defects', defects || []);
-      await offlineSync.storeData('vessels', 
-        vesselIds.map(id => ({ vessel_id: id, vessel_name: vesselsMap[id] }))
-      );
+      // Store data in IndexedDB for offline access
+      if (defects) {
+        await offlineSync.storeData('defects', defects);
+      }
 
       setAssignedVessels(vesselIds);
       setVesselNames(vesselsMap);
@@ -159,9 +158,12 @@ function App() {
       }
     };
 
-    initializeApp();
+    if (session?.user) {
+      initializeApp();
+    } else {
+      setIsInitialLoad(false);
+    }
   }, [session, offlineSync, fetchUserData]);
-
   // Handle online/offline status
   useEffect(() => {
     const handleOnline = async () => {
@@ -172,9 +174,6 @@ function App() {
         if (session?.user) {
           await fetchUserData();
         }
-        const pendingCount = await offlineSync.getPendingSyncCount();
-        setPendingSyncCount(pendingCount);
-        
         toast({
           title: "Back Online",
           description: "All changes have been synchronized",
@@ -207,10 +206,10 @@ function App() {
     };
   }, [offlineSync, fetchUserData, session]);
 
-  // Filter data
+  // Updated filteredData to handle array of selected vessels
   const filteredData = React.useMemo(() => {
     return data.filter(defect => {
-      const matchesVessel = !currentVessel || defect.vessel_id === currentVessel;
+      const matchesVessel = currentVessel.length === 0 || currentVessel.includes(defect.vessel_id);
       const matchesStatus = !statusFilter || defect['Status (Vessel)'] === statusFilter;
       const matchesCriticality = !criticalityFilter || defect.Criticality === criticalityFilter;
       const matchesSearch = !searchTerm || 
@@ -222,7 +221,23 @@ function App() {
     });
   }, [data, currentVessel, statusFilter, criticalityFilter, searchTerm]);
 
-  // Handlers
+  // PDF Generation handler
+  const handleGeneratePdf = useCallback(async () => {
+    setIsPdfGenerating(true);
+    try {
+      await new Promise(resolve => setTimeout(resolve, 1000));
+    } catch (error) {
+      toast({
+        title: "Error",
+        description: "Failed to generate PDF. Please try again.",
+        variant: "destructive",
+      });
+    } finally {
+      setIsPdfGenerating(false);
+    }
+  }, [toast]);
+
+  // Handle adding new defect
   const handleAddDefect = () => {
     if (assignedVessels.length === 0) {
       toast({
@@ -248,6 +263,7 @@ function App() {
     setIsDefectDialogOpen(true);
   };
 
+  // Modified save defect handler with offline support
   const handleSaveDefect = async (updatedDefect) => {
     try {
       if (!assignedVessels.includes(updatedDefect.vessel_id)) {
@@ -259,6 +275,7 @@ function App() {
         vessel_name: vesselNames[updatedDefect.vessel_id]
       };
 
+      // Use offline sync manager to save defect
       const savedDefect = await offlineSync.saveDefect(defectData);
 
       // Update local state
@@ -278,7 +295,7 @@ function App() {
       }
 
       toast({
-        title: "Defect Saved",
+        title: updatedDefect.id?.startsWith('temp-') ? "Defect Added" : "Defect Updated",
         description: isOnline 
           ? "Successfully saved to server" 
           : "Saved offline. Will sync when connection is restored",
@@ -313,7 +330,15 @@ function App() {
     }
   };
 
-  // Loading states
+  // Get vessel name for ChatBot, handling multiple selections
+  const getSelectedVesselsDisplay = () => {
+    if (currentVessel.length === 0) return 'All Vessels';
+    if (currentVessel.length === 1) {
+      return vesselNames[currentVessel[0]] || 'All Vessels';
+    }
+    return `${currentVessel.length} Vessels Selected`;
+  };
+
   if (isInitialLoad) {
     return (
       <div className="min-h-screen bg-[#0B1623] flex items-center justify-center">
@@ -325,7 +350,6 @@ function App() {
   return (
     <ToastProvider>
       <div className="min-h-screen bg-background">
-        {/* Offline/Syncing Status Indicators */}
         {!isOnline && (
           <div className="fixed top-0 left-0 right-0 bg-yellow-500 text-white px-4 py-2 text-center z-50">
             Working Offline 
@@ -392,14 +416,14 @@ function App() {
 
               <ChatBot 
                 data={filteredData}
-                vesselName={vesselNames[currentVessel] || 'All Vessels'}
+                vesselName={getSelectedVesselsDisplay()}
                 filters={{
                   status: statusFilter,
                   criticality: criticalityFilter,
                   search: searchTerm
                 }}
                 isPdfGenerating={isPdfGenerating}
-                onGeneratePdf={() => setIsPdfGenerating(true)}
+                onGeneratePdf={handleGeneratePdf}
               />
             </main>
           </>
