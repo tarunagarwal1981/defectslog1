@@ -21,19 +21,28 @@ class OfflineSync {
       request.onupgradeneeded = (event) => {
         const db = event.target.result;
         
+        // Defects store - uses compound key
         if (!db.objectStoreNames.contains(this.stores.defects)) {
-          db.createObjectStore(this.stores.defects, { keyPath: 'id' });
+          const defectStore = db.createObjectStore(this.stores.defects, { 
+            keyPath: 'id',
+            autoIncrement: true 
+          });
+          defectStore.createIndex('vessel_id', 'vessel_id', { unique: false });
+          defectStore.createIndex('date_reported', 'Date Reported', { unique: false });
         }
         
+        // Sync queue store
         if (!db.objectStoreNames.contains(this.stores.syncQueue)) {
           db.createObjectStore(this.stores.syncQueue, { 
-            keyPath: 'timestamp',
-            autoIncrement: true 
+            keyPath: 'timestamp'
           });
         }
 
+        // Vessels store
         if (!db.objectStoreNames.contains(this.stores.vessels)) {
-          db.createObjectStore(this.stores.vessels, { keyPath: 'vessel_id' });
+          db.createObjectStore(this.stores.vessels, { 
+            keyPath: ['vessel_id', 'vessel_name']
+          });
         }
       };
     });
@@ -45,10 +54,37 @@ class OfflineSync {
       const tx = db.transaction(storeName, 'readwrite');
       const store = tx.objectStore(storeName);
 
+      // Ensure data has required keys based on store
+      const processData = (item) => {
+        switch (storeName) {
+          case this.stores.defects:
+            return {
+              ...item,
+              id: item.id || `local-${Date.now()}-${Math.random()}`,
+              lastModified: new Date().toISOString()
+            };
+          case this.stores.vessels:
+            return {
+              vessel_id: item.vessel_id,
+              vessel_name: item.vessel_name || item.vessels?.vessel_name || 'Unknown'
+            };
+          case this.stores.syncQueue:
+            return {
+              ...item,
+              timestamp: item.timestamp || new Date().toISOString()
+            };
+          default:
+            return item;
+        }
+      };
+
+      // Process and store the data
       if (Array.isArray(data)) {
-        await Promise.all(data.map(item => store.put(item)));
+        await Promise.all(data.map(item => 
+          store.put(processData(item))
+        ));
       } else {
-        await store.put(data);
+        await store.put(processData(data));
       }
 
       await new Promise((resolve, reject) => {
@@ -76,7 +112,7 @@ class OfflineSync {
       });
     } catch (error) {
       console.error('Error getting defects:', error);
-      throw error;
+      return [];
     }
   }
 
@@ -93,7 +129,7 @@ class OfflineSync {
       });
     } catch (error) {
       console.error('Error getting vessels:', error);
-      throw error;
+      return [];
     }
   }
 
@@ -102,11 +138,13 @@ class OfflineSync {
       const timestamp = new Date().toISOString();
       const defectWithMeta = {
         ...defect,
+        id: defect.id || `local-${Date.now()}-${Math.random()}`,
         lastModified: timestamp,
         _syncStatus: navigator.onLine ? 'synced' : 'pending'
       };
 
       if (navigator.onLine) {
+        // If online, save to server
         const { data, error } = await supabase
           .from('defects register')
           .upsert([defectWithMeta])
@@ -115,10 +153,12 @@ class OfflineSync {
 
         if (error) throw error;
         
+        // Save to local DB for offline access
         await this.storeData(this.stores.defects, data);
         return data;
       }
 
+      // If offline, save locally and queue for sync
       await this.storeData(this.stores.defects, defectWithMeta);
       await this.storeData(this.stores.syncQueue, {
         type: 'upsert',
@@ -133,20 +173,13 @@ class OfflineSync {
     }
   }
 
+  // Rest of the methods remain the same
   async syncWithServer() {
     if (!navigator.onLine) return;
 
     try {
-      const db = await this.initDB();
-      const tx = db.transaction(this.stores.syncQueue, 'readonly');
-      const store = tx.objectStore(this.stores.syncQueue);
+      const queue = await this.getData(this.stores.syncQueue);
       
-      const queue = await new Promise((resolve, reject) => {
-        const request = store.getAll();
-        request.onsuccess = () => resolve(request.result);
-        request.onerror = () => reject(request.error);
-      });
-
       for (const item of queue) {
         try {
           const { error } = await supabase
@@ -155,8 +188,8 @@ class OfflineSync {
 
           if (error) throw error;
 
-          const deleteTx = db.transaction(this.stores.syncQueue, 'readwrite');
-          await deleteTx.objectStore(this.stores.syncQueue).delete(item.timestamp);
+          // Remove from queue after successful sync
+          await this.deleteFromStore(this.stores.syncQueue, item.timestamp);
         } catch (error) {
           console.error('Error syncing item:', error);
         }
@@ -182,6 +215,12 @@ class OfflineSync {
       console.error('Error getting pending sync count:', error);
       return 0;
     }
+  }
+
+  async deleteFromStore(storeName, key) {
+    const db = await this.initDB();
+    const tx = db.transaction(storeName, 'readwrite');
+    await tx.objectStore(storeName).delete(key);
   }
 
   async clearAll() {
