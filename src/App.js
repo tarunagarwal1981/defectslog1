@@ -128,15 +128,6 @@ function App() {
   }, [session?.user?.id, toast, offlineSync]);
 
   // Load initial data and handle offline
-  
-
-<ANTARTIFACTLINK identifier="simplified-offline-sync" type="application/vnd.ant.code" language="javascript" title="src/services/OfflineSync.js" isClosed="true" />
-
-Now, update the initialization in App.js:
-
-```javascript
-// In App.js
-
 useEffect(() => {
   const initializeData = async () => {
     if (!session?.user) {
