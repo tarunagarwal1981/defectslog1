@@ -128,45 +128,54 @@ function App() {
   }, [session?.user?.id, toast, offlineSync]);
 
   // Load initial data and handle offline
-  useEffect(() => {
-    const initializeData = async () => {
-      if (!session?.user) {
-        setData([]);
-        setAssignedVessels([]);
-        setVesselNames({});
-        return;
+  // Replace the initializeData function in App.js with:
+
+useEffect(() => {
+  const initializeData = async () => {
+    if (!session?.user) {
+      setData([]);
+      setAssignedVessels([]);
+      setVesselNames({});
+      return;
+    }
+
+    try {
+      // Try to load cached data first
+      const cachedDefects = await offlineSync.getDefects();
+      const cachedVessels = await offlineSync.getVessels();
+
+      if (cachedDefects?.length) {
+        setData(cachedDefects);
+      }
+      if (cachedVessels?.length) {
+        const vesselsMap = cachedVessels.reduce((acc, v) => ({
+          ...acc,
+          [v.vessel_id]: v.vessel_name
+        }), {});
+        setVesselNames(vesselsMap);
       }
 
-      try {
-        // Try to load cached data first
-        const [cachedDefects, cachedVessels] = await Promise.all([
-          offlineSync.getData('defects'),
-          offlineSync.getData('vessels')
-        ]);
-
-        if (cachedDefects?.length) {
-          setData(cachedDefects);
-        }
-        if (cachedVessels) {
-          setVesselNames(cachedVessels);
-        }
-
-        // If online, fetch fresh data
-        if (navigator.onLine) {
-          await fetchUserData();
-        }
-
-        // Get pending sync count
-        const pendingCount = await offlineSync.getPendingSyncCount();
-        setPendingSyncCount(pendingCount);
-
-      } catch (error) {
-        console.error('Error initializing data:', error);
+      // If online, fetch fresh data
+      if (navigator.onLine) {
+        await fetchUserData();
       }
-    };
 
-    initializeData();
-  }, [session?.user, fetchUserData, offlineSync]);
+      // Get pending sync count
+      const pendingCount = await offlineSync.getPendingSyncCount();
+      setPendingSyncCount(pendingCount);
+
+    } catch (error) {
+      console.error('Error initializing data:', error);
+      toast({
+        title: "Error",
+        description: "Some data may not be available offline",
+        variant: "destructive",
+      });
+    }
+  };
+
+  initializeData();
+}, [session?.user, fetchUserData, offlineSync]);
 
   // Handle online/offline status
   useEffect(() => {
