@@ -16,7 +16,6 @@ class OfflineSync {
       request.onupgradeneeded = (event) => {
         const db = event.target.result;
         
-        // Single store for all defects
         if (!db.objectStoreNames.contains('defects')) {
           db.createObjectStore('defects', { 
             keyPath: 'localId' 
@@ -30,13 +29,12 @@ class OfflineSync {
     return `local_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
   }
 
-  async storeDefects(defects) {
+  async storeData(defects) {  // Keep this method for compatibility
     try {
       const db = await this.initDB();
       const tx = db.transaction('defects', 'readwrite');
       const store = tx.objectStore('defects');
 
-      // Ensure each defect has a localId
       const defectsWithIds = Array.isArray(defects) ? defects : [defects];
       
       for (const defect of defectsWithIds) {
@@ -53,9 +51,13 @@ class OfflineSync {
         tx.onerror = () => reject(tx.error);
       });
     } catch (error) {
-      console.error('Error storing defects:', error);
+      console.error('Error storing data:', error);
       return Array.isArray(defects) ? defects : [defects];
     }
+  }
+
+  async getData(storeName) {  // Keep this method for compatibility
+    return this.getDefects();
   }
 
   async getDefects() {
@@ -85,7 +87,6 @@ class OfflineSync {
       };
 
       if (navigator.onLine) {
-        // Try to save to server
         const { data, error } = await supabase
           .from('defects register')
           .upsert([defect])
@@ -94,13 +95,14 @@ class OfflineSync {
 
         if (error) throw error;
         
-        // Store server response locally
-        await this.storeDefects(data);
+        await this.storeData({
+          ...data,
+          localId: defectWithId.localId
+        });
         return data;
       }
 
-      // Store locally if offline
-      await this.storeDefects(defectWithId);
+      await this.storeData(defectWithId);
       return defectWithId;
     } catch (error) {
       console.error('Error saving defect:', error);
@@ -117,15 +119,17 @@ class OfflineSync {
 
       for (const defect of pendingDefects) {
         try {
-          const { error } = await supabase
+          const { data, error } = await supabase
             .from('defects register')
-            .upsert([defect]);
+            .upsert([defect])
+            .select()
+            .single();
 
           if (error) throw error;
 
-          // Update local status
-          await this.storeDefects({
-            ...defect,
+          await this.storeData({
+            ...data,
+            localId: defect.localId,
             _syncStatus: 'synced'
           });
         } catch (error) {
