@@ -332,74 +332,80 @@ useEffect(() => {
  
 
 const handleSaveDefect = async (updatedDefect) => {
-    try {
-      if (!assignedVessels.includes(updatedDefect.vessel_id)) {
-        throw new Error("Not authorized for this vessel");
-      }
-
-      const isNewDefect = updatedDefect.id?.startsWith('temp-');
-      
-      const defectData = {
-        vessel_id: updatedDefect.vessel_id,
-        vessel_name: vesselNames[updatedDefect.vessel_id],
-        "Status (Vessel)": updatedDefect['Status (Vessel)'],
-        Equipments: updatedDefect.Equipments,
-        Description: updatedDefect.Description,
-        "Action Planned": updatedDefect['Action Planned'],
-        Criticality: updatedDefect.Criticality,
-        "Date Reported": updatedDefect['Date Reported'],
-        "Date Completed": updatedDefect['Date Completed'] || null,
-        Comments: updatedDefect.Comments || ''
-      };
-
-      let savedDefect;
-
-      if (navigator.onLine) {
-        const { data, error } = isNewDefect
-          ? await supabase.from('defects register').insert([defectData]).select().single()
-          : await supabase.from('defects register').update(defectData).eq('id', updatedDefect.id).select().single();
-
-        if (error) throw error;
-        savedDefect = data;
-
-        // Update offline storage
-        await offlineSync.storeData(savedDefect);
-      } else {
-        // Offline save
-        savedDefect = {
-          ...defectData,
-          id: isNewDefect ? `offline_${Date.now()}` : updatedDefect.id,
-          _syncStatus: 'pending'
-        };
-        await offlineSync.storeData(savedDefect);
-        setPendingSyncCount(await offlineSync.getPendingSyncCount());
-      }
-
-      // Update local state
-      setData(prevData => {
-        const newData = isNewDefect
-          ? [savedDefect, ...prevData]
-          : prevData.map(d => d.id === savedDefect.id ? savedDefect : d);
-        return newData.sort((a, b) => new Date(b['Date Reported']) - new Date(a['Date Reported']));
-      });
-
-      setIsDefectDialogOpen(false);
-      setCurrentDefect(null);
-
-      toast({
-        title: isNewDefect ? "Defect Added" : "Defect Updated",
-        description: navigator.onLine ? "Saved successfully" : "Saved offline - will sync when online",
-      });
-
-    } catch (error) {
-      console.error("Error saving defect:", error);
-      toast({
-        title: "Error",
-        description: error.message || "Failed to save defect",
-        variant: "destructive",
-      });
+  try {
+    if (!assignedVessels.includes(updatedDefect.vessel_id)) {
+      throw new Error("Not authorized for this vessel");
     }
-  };
+
+    const isNewDefect = updatedDefect.id?.startsWith('temp-');
+    
+    // Remove temporary fields that shouldn't go to the database
+    const defectData = {
+      vessel_id: updatedDefect.vessel_id,
+      vessel_name: vesselNames[updatedDefect.vessel_id],
+      "Status (Vessel)": updatedDefect['Status (Vessel)'],
+      Equipments: updatedDefect.Equipments,
+      Description: updatedDefect.Description,
+      "Action Planned": updatedDefect['Action Planned'],
+      Criticality: updatedDefect.Criticality,
+      "Date Reported": updatedDefect['Date Reported'],
+      "Date Completed": updatedDefect['Date Completed'] || null,
+      Comments: updatedDefect.Comments || ''
+    };
+
+    // For existing defects, include the id
+    if (!isNewDefect) {
+      defectData.id = updatedDefect.id;
+    }
+
+    let savedDefect;
+
+    if (navigator.onLine) {
+      const { data, error } = isNewDefect
+        ? await supabase.from('defects register').insert([defectData]).select().single()
+        : await supabase.from('defects register').update(defectData).eq('id', updatedDefect.id).select().single();
+
+      if (error) throw error;
+      savedDefect = data;
+
+      // Update offline storage
+      await offlineSync.storeData(savedDefect);
+    } else {
+      // Offline save
+      savedDefect = {
+        ...defectData,
+        id: isNewDefect ? `offline_${Date.now()}` : updatedDefect.id,
+        _syncStatus: 'pending'
+      };
+      await offlineSync.storeData(savedDefect);
+      setPendingSyncCount(await offlineSync.getPendingSyncCount());
+    }
+
+    // Update local state
+    setData(prevData => {
+      const newData = isNewDefect
+        ? [savedDefect, ...prevData]
+        : prevData.map(d => d.id === savedDefect.id ? savedDefect : d);
+      return newData.sort((a, b) => new Date(b['Date Reported']) - new Date(a['Date Reported']));
+    });
+
+    setIsDefectDialogOpen(false);
+    setCurrentDefect(null);
+
+    toast({
+      title: isNewDefect ? "Defect Added" : "Defect Updated",
+      description: navigator.onLine ? "Saved successfully" : "Saved offline - will sync when online",
+    });
+
+  } catch (error) {
+    console.error("Error saving defect:", error);
+    toast({
+      title: "Error",
+      description: error.message || "Failed to save defect",
+      variant: "destructive",
+    });
+  }
+};
   const handleLogout = async () => {
     try {
       const { error } = await supabase.auth.signOut();
