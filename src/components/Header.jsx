@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useState, useEffect } from 'react';
 import { 
   DropdownMenu, 
   DropdownMenuContent, 
@@ -7,7 +7,45 @@ import {
   DropdownMenuSeparator,
   DropdownMenuLabel
 } from './ui/dropdown-menu';
-import { User, LogOut, ChevronDown } from 'lucide-react';
+import { User, LogOut, ChevronDown, Download } from 'lucide-react';
+
+// PWA Install Button Component
+const InstallPWA = () => {
+  const [supportsPWA, setSupportsPWA] = useState(false);
+  const [promptInstall, setPromptInstall] = useState(null);
+
+  useEffect(() => {
+    const handler = (e) => {
+      e.preventDefault();
+      setPromptInstall(e);
+      setSupportsPWA(true);
+    };
+
+    window.addEventListener('beforeinstallprompt', handler);
+    return () => window.removeEventListener('beforeinstallprompt', handler);
+  }, []);
+
+  const handleInstall = async () => {
+    if (!promptInstall) return;
+    promptInstall.prompt();
+    const { outcome } = await promptInstall.userChoice;
+    if (outcome === 'accepted') {
+      setPromptInstall(null);
+    }
+  };
+
+  if (!supportsPWA) return null;
+
+  return (
+    <button
+      onClick={handleInstall}
+      className="flex items-center gap-2 px-3 py-1.5 bg-[#3BADE5] text-white rounded-md hover:bg-[#3BADE5]/90 transition-colors text-sm"
+    >
+      <Download className="h-4 w-4" />
+      <span>Install App</span>
+    </button>
+  );
+};
 
 const Header = ({ user, vessels, currentVessel, onVesselChange, onLogout }) => {
   // Convert currentVessel to array if it's a string or empty
@@ -93,21 +131,25 @@ const Header = ({ user, vessels, currentVessel, onVesselChange, onLogout }) => {
           )}
         </div>
 
-        {/* User Menu */}
-        {user && (
-          <DropdownMenu>
-            <DropdownMenuTrigger className="flex items-center space-x-2 hover:bg-accent rounded-full p-2">
-              <User className="h-5 w-5" />
-              <span className="text-sm font-medium">{user.email}</span>
-            </DropdownMenuTrigger>
-            <DropdownMenuContent align="end">
-              <DropdownMenuItem onClick={onLogout} className="text-red-500">
-                <LogOut className="mr-2 h-4 w-4" />
-                <span>Logout</span>
-              </DropdownMenuItem>
-            </DropdownMenuContent>
-          </DropdownMenu>
-        )}
+        {/* Right Section: Install Button and User Menu */}
+        <div className="flex items-center space-x-4">
+          <InstallPWA />
+          
+          {user && (
+            <DropdownMenu>
+              <DropdownMenuTrigger className="flex items-center space-x-2 hover:bg-accent rounded-full p-2">
+                <User className="h-5 w-5" />
+                <span className="text-sm font-medium">{user.email}</span>
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="end">
+                <DropdownMenuItem onClick={onLogout} className="text-red-500">
+                  <LogOut className="mr-2 h-4 w-4" />
+                  <span>Logout</span>
+                </DropdownMenuItem>
+              </DropdownMenuContent>
+            </DropdownMenu>
+          )}
+        </div>
       </div>
     </header>
   );
