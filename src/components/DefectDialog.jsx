@@ -84,6 +84,7 @@ const DefectDialog = ({
       <DialogContent 
         className="max-w-md max-h-[90vh] overflow-y-auto bg-[#0B1623]"
         aria-describedby={dialogDescriptionId}
+        description={dialogDescription}
       >
         <DialogHeader>
           <DialogTitle className="text-sm font-medium text-white">
