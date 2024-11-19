@@ -1,28 +1,33 @@
 <!DOCTYPE html>
 <html lang="en">
-<head>
+  <head>
     <meta charset="utf-8" />
+    <link rel="icon" href="%PUBLIC_URL%/favicon.ico" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <meta name="theme-color" content="#0B1623" />
+    <meta
+      name="description"
+      content="Vessel Defect Management System"
+    />
+    <link rel="apple-touch-icon" href="%PUBLIC_URL%/logo192.png" />
     <link rel="manifest" href="%PUBLIC_URL%/manifest.json" />
     <title>Defect Manager</title>
-</head>
-<body>
+  </head>
+  <body>
     <noscript>You need to enable JavaScript to run this app.</noscript>
     <div id="root"></div>
-
     <script>
-        if ('serviceWorker' in navigator) {
-            window.addEventListener('load', () => {
-                navigator.serviceWorker.register('/serviceWorker.js')
-                    .then(registration => {
-                        console.log('ServiceWorker registered');
-                    })
-                    .catch(err => {
-                        console.error('ServiceWorker registration failed:', err);
-                    });
+      if ('serviceWorker' in navigator) {
+        window.addEventListener('load', () => {
+          navigator.serviceWorker.register('/service-worker.js')
+            .then(registration => {
+              console.log('ServiceWorker registered');
+            })
+            .catch(err => {
+              console.error('ServiceWorker registration failed:', err);
             });
-        }
+        });
+      }
     </script>
-</body>
+  </body>
 </html>
