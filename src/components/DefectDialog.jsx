@@ -233,7 +233,7 @@ const DefectDialog = ({
                 id="dateReported"
                 type="date"
                 className="flex h-8 w-full rounded-[4px] border border-[#3BADE5]/20 bg-[#132337] px-2 text-xs text-white focus:outline-none focus:ring-1 focus:ring-[#3BADE5] hover:border-[#3BADE5]/40"
-                value={defect?.['Date Reported'] || ''}
+                value={defect?.['Date Reported'] ? new Date(defect['Date Reported']).toISOString().split('T')[0] : ''}
                 onChange={(e) => onChange('Date Reported', e.target.value)}
                 required
                 aria-required="true"
@@ -247,7 +247,7 @@ const DefectDialog = ({
                 id="dateCompleted"
                 type="date"
                 className="flex h-8 w-full rounded-[4px] border border-[#3BADE5]/20 bg-[#132337] px-2 text-xs text-white focus:outline-none focus:ring-1 focus:ring-[#3BADE5] hover:border-[#3BADE5]/40"
-                value={defect?.['Date Completed'] || ''}
+                value={defect?.['Date Completed'] ? new Date(defect['Date Completed']).toISOString().split('T')[0] : ''}
                 onChange={(e) => onChange('Date Completed', e.target.value)}
               />
             </div>
