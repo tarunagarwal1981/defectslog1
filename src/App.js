@@ -128,7 +128,14 @@ function App() {
   }, [session?.user?.id, toast, offlineSync]);
 
   // Load initial data and handle offline
-  // Replace the initializeData function in App.js with:
+  
+
+<ANTARTIFACTLINK identifier="simplified-offline-sync" type="application/vnd.ant.code" language="javascript" title="src/services/OfflineSync.js" isClosed="true" />
+
+Now, update the initialization in App.js:
+
+```javascript
+// In App.js
 
 useEffect(() => {
   const initializeData = async () => {
@@ -142,17 +149,8 @@ useEffect(() => {
     try {
       // Try to load cached data first
       const cachedDefects = await offlineSync.getDefects();
-      const cachedVessels = await offlineSync.getVessels();
-
       if (cachedDefects?.length) {
         setData(cachedDefects);
-      }
-      if (cachedVessels?.length) {
-        const vesselsMap = cachedVessels.reduce((acc, v) => ({
-          ...acc,
-          [v.vessel_id]: v.vessel_name
-        }), {});
-        setVesselNames(vesselsMap);
       }
 
       // If online, fetch fresh data
@@ -160,7 +158,7 @@ useEffect(() => {
         await fetchUserData();
       }
 
-      // Get pending sync count
+      // Update pending sync count
       const pendingCount = await offlineSync.getPendingSyncCount();
       setPendingSyncCount(pendingCount);
 
