@@ -377,7 +377,7 @@ const handleSaveDefect = async (updatedDefect) => {
 
     const isNewDefect = updatedDefect.id?.startsWith('temp-');
     
-    // Remove temporary fields that shouldn't go to the database
+    // Prepare data without id for new defects
     const defectData = {
       vessel_id: updatedDefect.vessel_id,
       vessel_name: vesselNames[updatedDefect.vessel_id],
@@ -388,40 +388,53 @@ const handleSaveDefect = async (updatedDefect) => {
       Criticality: updatedDefect.Criticality,
       "Date Reported": updatedDefect['Date Reported'],
       "Date Completed": updatedDefect['Date Completed'] || null,
-      Comments: updatedDefect.Comments || ''
+      Comments: updatedDefect.Comments || '',
+      "SNo": updatedDefect.SNo || null  // Include SNo if it exists
     };
-
-    // For existing defects, include the id
-    if (!isNewDefect) {
-      defectData.id = updatedDefect.id;
-    }
 
     let savedDefect;
 
     if (navigator.onLine) {
-      const { data, error } = isNewDefect
-        ? await supabase.from('defects register').insert([defectData]).select().single()
-        : await supabase.from('defects register').update(defectData).eq('id', updatedDefect.id).select().single();
+      let supabaseQuery;
+      
+      if (isNewDefect) {
+        // For new defects, just insert the data without id
+        supabaseQuery = supabase
+          .from('defects register')
+          .insert([defectData])
+          .select()
+          .single();
+      } else {
+        // For updates, include the id in the query condition only
+        supabaseQuery = supabase
+          .from('defects register')
+          .update(defectData)
+          .eq('id', updatedDefect.id)
+          .select()
+          .single();
+      }
 
+      const { data, error } = await supabaseQuery;
       if (error) throw error;
       savedDefect = data;
 
-      // Update offline storage
+      // Store in offline cache
       await offlineSync.storeData(savedDefect);
     } else {
-      // Offline save
+      // Offline handling
+      const offlineId = `offline_${Date.now()}`;
       savedDefect = {
         ...defectData,
-        id: isNewDefect ? `offline_${Date.now()}` : updatedDefect.id,
+        id: isNewDefect ? offlineId : updatedDefect.id,
         _syncStatus: 'pending'
       };
       await offlineSync.storeData(savedDefect);
       setPendingSyncCount(await offlineSync.getPendingSyncCount());
     }
 
-    // Update local state
+    // Update UI state
     setData(prevData => {
-      const newData = isNewDefect
+      const newData = isNewDefect 
         ? [savedDefect, ...prevData]
         : prevData.map(d => d.id === savedDefect.id ? savedDefect : d);
       return newData.sort((a, b) => new Date(b['Date Reported']) - new Date(a['Date Reported']));
@@ -444,6 +457,7 @@ const handleSaveDefect = async (updatedDefect) => {
     });
   }
 };
+  
   const handleLogout = async () => {
     try {
       const { error } = await supabase.auth.signOut();
