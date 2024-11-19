@@ -257,52 +257,121 @@ useEffect(() => {
   };
 
   // Handle saving defect
-  const handleSaveDefect = async (updatedDefect) => {
-    try {
-      if (!assignedVessels.includes(updatedDefect.vessel_id)) {
-        throw new Error("Not authorized for this vessel");
+  // Replace your handleSaveDefect function with this updated version:
+
+const handleSaveDefect = async (updatedDefect) => {
+  try {
+    if (!assignedVessels.includes(updatedDefect.vessel_id)) {
+      throw new Error("Not authorized for this vessel");
+    }
+
+    const isNewDefect = updatedDefect.id?.startsWith('temp-');
+    
+    const defectData = {
+      vessel_id: updatedDefect.vessel_id,
+      vessel_name: vesselNames[updatedDefect.vessel_id],
+      "Status (Vessel)": updatedDefect['Status (Vessel)'],
+      Equipments: updatedDefect.Equipments,
+      Description: updatedDefect.Description,
+      "Action Planned": updatedDefect['Action Planned'],
+      Criticality: updatedDefect.Criticality,
+      "Date Reported": updatedDefect['Date Reported'],
+      "Date Completed": updatedDefect['Date Completed'] || null,
+      Comments: updatedDefect.Comments || ''
+    };
+
+    if (isOnline) {
+      let result;
+      if (isNewDefect) {
+        // For new defects
+        const { data: insertedData, error: insertError } = await supabase
+          .from('defects register')
+          .insert([defectData])
+          .select('*')
+          .single();
+
+        if (insertError) throw insertError;
+        result = insertedData;
+        
+        // Store in offline storage
+        await offlineSync.storeData({
+          ...result,
+          localId: `server_${result.id}`
+        });
+
+        // Add to local state
+        setData(prevData => [result, ...prevData]);
+      } else {
+        // For existing defects
+        const { data: updatedData, error: updateError } = await supabase
+          .from('defects register')
+          .update(defectData)
+          .eq('id', updatedDefect.id)
+          .select('*')
+          .single();
+
+        if (updateError) throw updateError;
+        result = updatedData;
+        
+        // Store in offline storage
+        await offlineSync.storeData({
+          ...result,
+          localId: `server_${result.id}`
+        });
+
+        // Update local state
+        setData(prevData => prevData.map(d => 
+          d.id === result.id ? result : d
+        ));
       }
 
-      const defectData = {
-        ...updatedDefect,
-        vessel_name: vesselNames[updatedDefect.vessel_id]
+      toast({
+        title: isNewDefect ? "Defect Added" : "Defect Updated",
+        description: "Successfully saved to server",
+      });
+    } else {
+      // Offline mode
+      const tempDefect = {
+        ...defectData,
+        id: isNewDefect ? `temp-${Date.now()}` : updatedDefect.id,
+        localId: `offline_${Date.now()}`,
+        _syncStatus: 'pending'
       };
 
-      const savedDefect = await offlineSync.saveDefect(defectData);
+      // Save to offline storage
+      await offlineSync.storeData(tempDefect);
 
-      setData(prevData => {
-        const isNew = !prevData.find(d => d.id === savedDefect.id);
-        if (isNew) {
-          return [savedDefect, ...prevData];
-        }
-        return prevData.map(d => d.id === savedDefect.id ? savedDefect : d)
-          .sort((a, b) => new Date(b['Date Reported']) - new Date(a['Date Reported']));
-      });
-
-      if (!navigator.onLine) {
-        const pendingCount = await offlineSync.getPendingSyncCount();
-        setPendingSyncCount(pendingCount);
+      // Update local state
+      if (isNewDefect) {
+        setData(prevData => [tempDefect, ...prevData]);
+      } else {
+        setData(prevData => prevData.map(d => 
+          d.id === updatedDefect.id ? tempDefect : d
+        ));
       }
 
-      toast({
-        title: updatedDefect.id?.startsWith('temp-') ? "Defect Added" : "Defect Updated",
-        description: isOnline 
-          ? "Successfully saved to server" 
-          : "Saved offline. Will sync when connection is restored",
-      });
+      // Update pending sync count
+      const pendingCount = await offlineSync.getPendingSyncCount();
+      setPendingSyncCount(pendingCount);
 
-      setIsDefectDialogOpen(false);
-      setCurrentDefect(null);
-
-    } catch (error) {
-      console.error("Error saving defect:", error);
       toast({
-        title: "Error",
-        description: error.message || "Failed to save defect",
-        variant: "destructive",
+        title: isNewDefect ? "Defect Added" : "Defect Updated",
+        description: "Saved offline. Will sync when connection is restored",
       });
     }
-  };
+
+    setIsDefectDialogOpen(false);
+    setCurrentDefect(null);
+
+  } catch (error) {
+    console.error("Error saving defect:", error);
+    toast({
+      title: "Error",
+      description: error.message || "Failed to save defect",
+      variant: "destructive",
+    });
+  }
+};
 
   const handleLogout = async () => {
     try {
