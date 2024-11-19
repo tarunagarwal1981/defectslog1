@@ -4,11 +4,6 @@ class OfflineSync {
   constructor() {
     this.dbName = 'defect-manager-db';
     this.dbVersion = 1;
-    this.stores = {
-      defects: 'defects',
-      syncQueue: 'syncQueue',
-      vessels: 'vessels'
-    };
   }
 
   async initDB() {
@@ -21,93 +16,57 @@ class OfflineSync {
       request.onupgradeneeded = (event) => {
         const db = event.target.result;
         
-        // Defects store - uses compound key
-        if (!db.objectStoreNames.contains(this.stores.defects)) {
-          const defectStore = db.createObjectStore(this.stores.defects, { 
-            keyPath: 'id',
-            autoIncrement: true 
-          });
-          defectStore.createIndex('vessel_id', 'vessel_id', { unique: false });
-          defectStore.createIndex('date_reported', 'Date Reported', { unique: false });
-        }
-        
-        // Sync queue store
-        if (!db.objectStoreNames.contains(this.stores.syncQueue)) {
-          db.createObjectStore(this.stores.syncQueue, { 
-            keyPath: 'timestamp'
-          });
-        }
-
-        // Vessels store
-        if (!db.objectStoreNames.contains(this.stores.vessels)) {
-          db.createObjectStore(this.stores.vessels, { 
-            keyPath: ['vessel_id', 'vessel_name']
+        // Single store for all defects
+        if (!db.objectStoreNames.contains('defects')) {
+          db.createObjectStore('defects', { 
+            keyPath: 'localId' 
           });
         }
       };
     });
   }
 
-  async storeData(storeName, data) {
+  generateLocalId() {
+    return `local_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+  }
+
+  async storeDefects(defects) {
     try {
       const db = await this.initDB();
-      const tx = db.transaction(storeName, 'readwrite');
-      const store = tx.objectStore(storeName);
+      const tx = db.transaction('defects', 'readwrite');
+      const store = tx.objectStore('defects');
 
-      // Ensure data has required keys based on store
-      const processData = (item) => {
-        switch (storeName) {
-          case this.stores.defects:
-            return {
-              ...item,
-              id: item.id || `local-${Date.now()}-${Math.random()}`,
-              lastModified: new Date().toISOString()
-            };
-          case this.stores.vessels:
-            return {
-              vessel_id: item.vessel_id,
-              vessel_name: item.vessel_name || item.vessels?.vessel_name || 'Unknown'
-            };
-          case this.stores.syncQueue:
-            return {
-              ...item,
-              timestamp: item.timestamp || new Date().toISOString()
-            };
-          default:
-            return item;
-        }
-      };
-
-      // Process and store the data
-      if (Array.isArray(data)) {
-        await Promise.all(data.map(item => 
-          store.put(processData(item))
-        ));
-      } else {
-        await store.put(processData(data));
+      // Ensure each defect has a localId
+      const defectsWithIds = Array.isArray(defects) ? defects : [defects];
+      
+      for (const defect of defectsWithIds) {
+        const defectWithId = {
+          ...defect,
+          localId: defect.localId || this.generateLocalId(),
+          lastModified: new Date().toISOString()
+        };
+        await store.put(defectWithId);
       }
 
-      await new Promise((resolve, reject) => {
-        tx.oncomplete = resolve;
+      return new Promise((resolve, reject) => {
+        tx.oncomplete = () => resolve(defectsWithIds);
         tx.onerror = () => reject(tx.error);
       });
-
-      return data;
     } catch (error) {
-      console.error('Error storing data:', error);
-      throw error;
+      console.error('Error storing defects:', error);
+      return Array.isArray(defects) ? defects : [defects];
     }
   }
 
   async getDefects() {
     try {
       const db = await this.initDB();
-      const tx = db.transaction(this.stores.defects, 'readonly');
-      const store = tx.objectStore(this.stores.defects);
+      const tx = db.transaction('defects', 'readonly');
+      const store = tx.objectStore('defects');
 
       return new Promise((resolve, reject) => {
         const request = store.getAll();
-        request.onsuccess = () => resolve(request.result);
+        request.onsuccess = () => resolve(request.result || []);
         request.onerror = () => reject(request.error);
       });
     } catch (error) {
@@ -116,126 +75,89 @@ class OfflineSync {
     }
   }
 
-  async getVessels() {
-    try {
-      const db = await this.initDB();
-      const tx = db.transaction(this.stores.vessels, 'readonly');
-      const store = tx.objectStore(this.stores.vessels);
-
-      return new Promise((resolve, reject) => {
-        const request = store.getAll();
-        request.onsuccess = () => resolve(request.result);
-        request.onerror = () => reject(request.error);
-      });
-    } catch (error) {
-      console.error('Error getting vessels:', error);
-      return [];
-    }
-  }
-
   async saveDefect(defect) {
     try {
-      const timestamp = new Date().toISOString();
-      const defectWithMeta = {
+      const defectWithId = {
         ...defect,
-        id: defect.id || `local-${Date.now()}-${Math.random()}`,
-        lastModified: timestamp,
+        localId: defect.localId || this.generateLocalId(),
+        lastModified: new Date().toISOString(),
         _syncStatus: navigator.onLine ? 'synced' : 'pending'
       };
 
       if (navigator.onLine) {
-        // If online, save to server
+        // Try to save to server
         const { data, error } = await supabase
           .from('defects register')
-          .upsert([defectWithMeta])
+          .upsert([defect])
           .select()
           .single();
 
         if (error) throw error;
         
-        // Save to local DB for offline access
-        await this.storeData(this.stores.defects, data);
+        // Store server response locally
+        await this.storeDefects(data);
         return data;
       }
 
-      // If offline, save locally and queue for sync
-      await this.storeData(this.stores.defects, defectWithMeta);
-      await this.storeData(this.stores.syncQueue, {
-        type: 'upsert',
-        data: defectWithMeta,
-        timestamp
-      });
-
-      return defectWithMeta;
+      // Store locally if offline
+      await this.storeDefects(defectWithId);
+      return defectWithId;
     } catch (error) {
       console.error('Error saving defect:', error);
-      throw error;
+      return defect;
     }
   }
 
-  // Rest of the methods remain the same
   async syncWithServer() {
     if (!navigator.onLine) return;
 
     try {
-      const queue = await this.getData(this.stores.syncQueue);
-      
-      for (const item of queue) {
+      const defects = await this.getDefects();
+      const pendingDefects = defects.filter(d => d._syncStatus === 'pending');
+
+      for (const defect of pendingDefects) {
         try {
           const { error } = await supabase
             .from('defects register')
-            .upsert([item.data]);
+            .upsert([defect]);
 
           if (error) throw error;
 
-          // Remove from queue after successful sync
-          await this.deleteFromStore(this.stores.syncQueue, item.timestamp);
+          // Update local status
+          await this.storeDefects({
+            ...defect,
+            _syncStatus: 'synced'
+          });
         } catch (error) {
-          console.error('Error syncing item:', error);
+          console.error('Error syncing defect:', error);
         }
       }
     } catch (error) {
       console.error('Error in sync process:', error);
-      throw error;
     }
   }
 
   async getPendingSyncCount() {
     try {
-      const db = await this.initDB();
-      const tx = db.transaction(this.stores.syncQueue, 'readonly');
-      const store = tx.objectStore(this.stores.syncQueue);
-
-      return new Promise((resolve, reject) => {
-        const request = store.count();
-        request.onsuccess = () => resolve(request.result);
-        request.onerror = () => reject(request.error);
-      });
+      const defects = await this.getDefects();
+      return defects.filter(d => d._syncStatus === 'pending').length;
     } catch (error) {
       console.error('Error getting pending sync count:', error);
       return 0;
     }
   }
 
-  async deleteFromStore(storeName, key) {
-    const db = await this.initDB();
-    const tx = db.transaction(storeName, 'readwrite');
-    await tx.objectStore(storeName).delete(key);
-  }
-
   async clearAll() {
     try {
       const db = await this.initDB();
-      const tx = db.transaction(Object.values(this.stores), 'readwrite');
-      
-      await Promise.all(
-        Object.values(this.stores).map(storeName => 
-          tx.objectStore(storeName).clear()
-        )
-      );
+      const tx = db.transaction('defects', 'readwrite');
+      await tx.objectStore('defects').clear();
+      return new Promise((resolve, reject) => {
+        tx.oncomplete = resolve;
+        tx.onerror = () => reject(tx.error);
+      });
     } catch (error) {
       console.error('Error clearing data:', error);
-      throw error;
     }
   }
 }
