@@ -16,25 +16,51 @@ const InstallPWA = () => {
 
   useEffect(() => {
     const handler = (e) => {
+      // Prevent default install prompt
       e.preventDefault();
+      console.log('👉 beforeinstallprompt event triggered');
       setPromptInstall(e);
       setSupportsPWA(true);
     };
 
     window.addEventListener('beforeinstallprompt', handler);
+
+    // Check if PWA is installable
+    const isInstallable = window.matchMedia('(display-mode: standalone)').matches;
+    console.log('👉 Is app installable?', isInstallable);
+
+    // Log if already installed
+    const isInstalled = window.matchMedia('(display-mode: standalone)').matches;
+    console.log('👉 Is app already installed?', isInstalled);
+
     return () => window.removeEventListener('beforeinstallprompt', handler);
   }, []);
 
   const handleInstall = async () => {
-    if (!promptInstall) return;
+    if (!promptInstall) {
+      console.log('👉 No install prompt available');
+      return;
+    }
+    
+    console.log('👉 Showing install prompt');
     promptInstall.prompt();
+    
     const { outcome } = await promptInstall.userChoice;
+    console.log('👉 User choice:', outcome);
+    
     if (outcome === 'accepted') {
+      console.log('👉 PWA installed successfully');
       setPromptInstall(null);
     }
   };
 
-  if (!supportsPWA) return null;
+  // Always show button during development
+  const isDev = process.env.NODE_ENV === 'development';
+  
+  if (!supportsPWA && !isDev) {
+    console.log('👉 PWA not supported or already installed');
+    return null;
+  }
 
   return (
     <button
