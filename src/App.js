@@ -257,7 +257,7 @@ useEffect(() => {
   };
 
   // Handle saving defect
-  // Replace your handleSaveDefect function with this updated version:
+ 
 
 const handleSaveDefect = async (updatedDefect) => {
   try {
@@ -267,6 +267,14 @@ const handleSaveDefect = async (updatedDefect) => {
 
     const isNewDefect = updatedDefect.id?.startsWith('temp-');
     
+    // Format dates properly
+    const reportedDate = updatedDefect['Date Reported'] ? 
+      new Date(updatedDefect['Date Reported']).toISOString().split('T')[0] : null;
+    
+    const completedDate = updatedDefect['Date Completed'] ? 
+      new Date(updatedDefect['Date Completed']).toISOString().split('T')[0] : null;
+
+    // Prepare data for Supabase
     const defectData = {
       vessel_id: updatedDefect.vessel_id,
       vessel_name: vesselNames[updatedDefect.vessel_id],
@@ -275,31 +283,35 @@ const handleSaveDefect = async (updatedDefect) => {
       Description: updatedDefect.Description,
       "Action Planned": updatedDefect['Action Planned'],
       Criticality: updatedDefect.Criticality,
-      "Date Reported": updatedDefect['Date Reported'],
-      "Date Completed": updatedDefect['Date Completed'] || null,
+      "Date Reported": reportedDate,
+      "Date Completed": completedDate,
       Comments: updatedDefect.Comments || ''
     };
 
-    if (isOnline) {
-      let result;
+    let result;
+
+    // Handle saving based on online/offline status
+    if (navigator.onLine) {
       if (isNewDefect) {
         // For new defects
         const { data: insertedData, error: insertError } = await supabase
           .from('defects register')
-          .insert([defectData])
-          .select('*')
+          .insert(defectData)
+          .select()
           .single();
 
-        if (insertError) throw insertError;
+        if (insertError) {
+          console.error('Insert Error:', insertError);
+          throw insertError;
+        }
         result = insertedData;
-        
-        // Store in offline storage
+
+        // Add to local state and offline storage
         await offlineSync.storeData({
           ...result,
           localId: `server_${result.id}`
         });
 
-        // Add to local state
         setData(prevData => [result, ...prevData]);
       } else {
         // For existing defects
@@ -307,22 +319,25 @@ const handleSaveDefect = async (updatedDefect) => {
           .from('defects register')
           .update(defectData)
           .eq('id', updatedDefect.id)
-          .select('*')
+          .select()
           .single();
 
-        if (updateError) throw updateError;
+        if (updateError) {
+          console.error('Update Error:', updateError);
+          throw updateError;
+        }
         result = updatedData;
-        
-        // Store in offline storage
+
+        // Update local state and offline storage
         await offlineSync.storeData({
           ...result,
           localId: `server_${result.id}`
         });
 
-        // Update local state
-        setData(prevData => prevData.map(d => 
-          d.id === result.id ? result : d
-        ));
+        setData(prevData => 
+          prevData.map(d => d.id === result.id ? result : d)
+            .sort((a, b) => new Date(b['Date Reported']) - new Date(a['Date Reported']))
+        );
       }
 
       toast({
@@ -338,19 +353,16 @@ const handleSaveDefect = async (updatedDefect) => {
         _syncStatus: 'pending'
       };
 
-      // Save to offline storage
       await offlineSync.storeData(tempDefect);
 
-      // Update local state
       if (isNewDefect) {
         setData(prevData => [tempDefect, ...prevData]);
       } else {
-        setData(prevData => prevData.map(d => 
-          d.id === updatedDefect.id ? tempDefect : d
-        ));
+        setData(prevData => 
+          prevData.map(d => d.id === updatedDefect.id ? tempDefect : d)
+        );
       }
 
-      // Update pending sync count
       const pendingCount = await offlineSync.getPendingSyncCount();
       setPendingSyncCount(pendingCount);
 
@@ -360,6 +372,7 @@ const handleSaveDefect = async (updatedDefect) => {
       });
     }
 
+    // Close dialog and reset state
     setIsDefectDialogOpen(false);
     setCurrentDefect(null);
 
