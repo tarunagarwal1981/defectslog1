@@ -7,7 +7,7 @@ class OfflineSync {
     this.stores = {
       defects: 'defects',
       syncQueue: 'syncQueue',
-      settings: 'settings'
+      vessels: 'vessels'
     };
   }
 
@@ -21,14 +21,10 @@ class OfflineSync {
       request.onupgradeneeded = (event) => {
         const db = event.target.result;
         
-        // Defects store
         if (!db.objectStoreNames.contains(this.stores.defects)) {
-          const defectStore = db.createObjectStore(this.stores.defects, { keyPath: 'id' });
-          defectStore.createIndex('vessel_id', 'vessel_id', { unique: false });
-          defectStore.createIndex('dateReported', 'Date Reported', { unique: false });
+          db.createObjectStore(this.stores.defects, { keyPath: 'id' });
         }
         
-        // Sync queue store
         if (!db.objectStoreNames.contains(this.stores.syncQueue)) {
           db.createObjectStore(this.stores.syncQueue, { 
             keyPath: 'timestamp',
@@ -36,12 +32,69 @@ class OfflineSync {
           });
         }
 
-        // Settings store
-        if (!db.objectStoreNames.contains(this.stores.settings)) {
-          db.createObjectStore(this.stores.settings, { keyPath: 'key' });
+        if (!db.objectStoreNames.contains(this.stores.vessels)) {
+          db.createObjectStore(this.stores.vessels, { keyPath: 'vessel_id' });
         }
       };
     });
+  }
+
+  async storeData(storeName, data) {
+    try {
+      const db = await this.initDB();
+      const tx = db.transaction(storeName, 'readwrite');
+      const store = tx.objectStore(storeName);
+
+      if (Array.isArray(data)) {
+        await Promise.all(data.map(item => store.put(item)));
+      } else {
+        await store.put(data);
+      }
+
+      await new Promise((resolve, reject) => {
+        tx.oncomplete = resolve;
+        tx.onerror = () => reject(tx.error);
+      });
+
+      return data;
+    } catch (error) {
+      console.error('Error storing data:', error);
+      throw error;
+    }
+  }
+
+  async getDefects() {
+    try {
+      const db = await this.initDB();
+      const tx = db.transaction(this.stores.defects, 'readonly');
+      const store = tx.objectStore(this.stores.defects);
+
+      return new Promise((resolve, reject) => {
+        const request = store.getAll();
+        request.onsuccess = () => resolve(request.result);
+        request.onerror = () => reject(request.error);
+      });
+    } catch (error) {
+      console.error('Error getting defects:', error);
+      throw error;
+    }
+  }
+
+  async getVessels() {
+    try {
+      const db = await this.initDB();
+      const tx = db.transaction(this.stores.vessels, 'readonly');
+      const store = tx.objectStore(this.stores.vessels);
+
+      return new Promise((resolve, reject) => {
+        const request = store.getAll();
+        request.onsuccess = () => resolve(request.result);
+        request.onerror = () => reject(request.error);
+      });
+    } catch (error) {
+      console.error('Error getting vessels:', error);
+      throw error;
+    }
   }
 
   async saveDefect(defect) {
@@ -53,30 +106,25 @@ class OfflineSync {
         _syncStatus: navigator.onLine ? 'synced' : 'pending'
       };
 
-      // Save to IndexedDB
-      const db = await this.initDB();
-      const tx = db.transaction([this.stores.defects, this.stores.syncQueue], 'readwrite');
-      
-      // Save defect
-      await tx.objectStore(this.stores.defects).put(defectWithMeta);
-
-      // If offline, add to sync queue
-      if (!navigator.onLine) {
-        await tx.objectStore(this.stores.syncQueue).add({
-          type: 'upsert',
-          data: defectWithMeta,
-          timestamp
-        });
-      } else {
-        // If online, save to server
+      if (navigator.onLine) {
         const { data, error } = await supabase
           .from('defects register')
           .upsert([defectWithMeta])
-          .select('*')
+          .select()
           .single();
 
         if (error) throw error;
+        
+        await this.storeData(this.stores.defects, data);
+        return data;
       }
+
+      await this.storeData(this.stores.defects, defectWithMeta);
+      await this.storeData(this.stores.syncQueue, {
+        type: 'upsert',
+        data: defectWithMeta,
+        timestamp
+      });
 
       return defectWithMeta;
     } catch (error) {
@@ -91,7 +139,13 @@ class OfflineSync {
     try {
       const db = await this.initDB();
       const tx = db.transaction(this.stores.syncQueue, 'readonly');
-      const queue = await tx.objectStore(this.stores.syncQueue).getAll();
+      const store = tx.objectStore(this.stores.syncQueue);
+      
+      const queue = await new Promise((resolve, reject) => {
+        const request = store.getAll();
+        request.onsuccess = () => resolve(request.result);
+        request.onerror = () => reject(request.error);
+      });
 
       for (const item of queue) {
         try {
@@ -101,20 +155,10 @@ class OfflineSync {
 
           if (error) throw error;
 
-          // Remove from queue after successful sync
           const deleteTx = db.transaction(this.stores.syncQueue, 'readwrite');
           await deleteTx.objectStore(this.stores.syncQueue).delete(item.timestamp);
-
-          // Update defect sync status
-          const defectTx = db.transaction(this.stores.defects, 'readwrite');
-          const defect = await defectTx.objectStore(this.stores.defects).get(item.data.id);
-          if (defect) {
-            defect._syncStatus = 'synced';
-            await defectTx.objectStore(this.stores.defects).put(defect);
-          }
         } catch (error) {
           console.error('Error syncing item:', error);
-          continue;
         }
       }
     } catch (error) {
@@ -123,31 +167,37 @@ class OfflineSync {
     }
   }
 
-  async getDefects() {
-    const db = await this.initDB();
-    const tx = db.transaction(this.stores.defects, 'readonly');
-    return tx.objectStore(this.stores.defects).getAll();
-  }
-
   async getPendingSyncCount() {
-    const db = await this.initDB();
-    const tx = db.transaction(this.stores.syncQueue, 'readonly');
-    const count = await tx.objectStore(this.stores.syncQueue).count();
-    return count;
+    try {
+      const db = await this.initDB();
+      const tx = db.transaction(this.stores.syncQueue, 'readonly');
+      const store = tx.objectStore(this.stores.syncQueue);
+
+      return new Promise((resolve, reject) => {
+        const request = store.count();
+        request.onsuccess = () => resolve(request.result);
+        request.onerror = () => reject(request.error);
+      });
+    } catch (error) {
+      console.error('Error getting pending sync count:', error);
+      return 0;
+    }
   }
 
   async clearAll() {
-    const db = await this.initDB();
-    const tx = db.transaction(
-      [this.stores.defects, this.stores.syncQueue, this.stores.settings],
-      'readwrite'
-    );
-    
-    await Promise.all([
-      tx.objectStore(this.stores.defects).clear(),
-      tx.objectStore(this.stores.syncQueue).clear(),
-      tx.objectStore(this.stores.settings).clear()
-    ]);
+    try {
+      const db = await this.initDB();
+      const tx = db.transaction(Object.values(this.stores), 'readwrite');
+      
+      await Promise.all(
+        Object.values(this.stores).map(storeName => 
+          tx.objectStore(storeName).clear()
+        )
+      );
+    } catch (error) {
+      console.error('Error clearing data:', error);
+      throw error;
+    }
   }
 }
 
