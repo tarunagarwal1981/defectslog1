@@ -1,7 +1,6 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { ToastProvider } from './components/ui/toast';
 import { useToast } from './components/ui/use-toast';
-import { AlertDialog, AlertDialogContent } from './components/ui/alert-dialog';
 import Auth from './components/Auth';
 import Header from './components/Header';
 import StatsCards from './components/StatsCards';
@@ -47,7 +46,7 @@ function App() {
   const [loading, setLoading] = useState(true);
   const [isPdfGenerating, setIsPdfGenerating] = useState(false);
   
-  // Filter states
+  // Filter states - updated for array of vessels
   const [currentVessel, setCurrentVessel] = useState([]);
   const [searchTerm, setSearchTerm] = useState('');
   const [statusFilter, setStatusFilter] = useState('');
@@ -62,7 +61,6 @@ function App() {
   const [isOnline, setIsOnline] = useState(navigator.onLine);
   const [isSyncing, setIsSyncing] = useState(false);
   const [pendingSyncCount, setPendingSyncCount] = useState(0);
-  const [isInitialLoad, setIsInitialLoad] = useState(true);
 
   // Initialize auth listener
   useEffect(() => {
@@ -98,7 +96,7 @@ function App() {
         return acc;
       }, {});
 
-      // Fetch defects for assigned vessels, sorted by date (newest first)
+      // Fetch defects for assigned vessels
       const { data: defects, error: defectsError } = await supabase
         .from('defects register')
         .select('*')
@@ -107,9 +105,10 @@ function App() {
 
       if (defectsError) throw defectsError;
 
-      // Store data in IndexedDB for offline access
+      // Store data for offline access
       if (defects) {
         await offlineSync.storeData('defects', defects);
+        await offlineSync.storeData('vessels', vesselsMap);
       }
 
       setAssignedVessels(vesselIds);
@@ -128,42 +127,47 @@ function App() {
     }
   }, [session?.user?.id, toast, offlineSync]);
 
-  // Initialize app with offline support
+  // Load initial data and handle offline
   useEffect(() => {
-    const initializeApp = async () => {
+    const initializeData = async () => {
+      if (!session?.user) {
+        setData([]);
+        setAssignedVessels([]);
+        setVesselNames({});
+        return;
+      }
+
       try {
         // Try to load cached data first
-        const cachedDefects = await offlineSync.getDefects();
+        const [cachedDefects, cachedVessels] = await Promise.all([
+          offlineSync.getData('defects'),
+          offlineSync.getData('vessels')
+        ]);
+
         if (cachedDefects?.length) {
           setData(cachedDefects);
+        }
+        if (cachedVessels) {
+          setVesselNames(cachedVessels);
+        }
+
+        // If online, fetch fresh data
+        if (navigator.onLine) {
+          await fetchUserData();
         }
 
         // Get pending sync count
         const pendingCount = await offlineSync.getPendingSyncCount();
         setPendingSyncCount(pendingCount);
 
-        // If online and authenticated, fetch fresh data
-        if (navigator.onLine && session?.user) {
-          await fetchUserData();
-        }
       } catch (error) {
-        console.error('Error initializing app:', error);
-        toast({
-          title: "Error",
-          description: "Failed to load some data. Some features may be limited.",
-          variant: "destructive",
-        });
-      } finally {
-        setIsInitialLoad(false);
+        console.error('Error initializing data:', error);
       }
     };
 
-    if (session?.user) {
-      initializeApp();
-    } else {
-      setIsInitialLoad(false);
-    }
-  }, [session, offlineSync, fetchUserData]);
+    initializeData();
+  }, [session?.user, fetchUserData, offlineSync]);
+
   // Handle online/offline status
   useEffect(() => {
     const handleOnline = async () => {
@@ -174,6 +178,9 @@ function App() {
         if (session?.user) {
           await fetchUserData();
         }
+        const pendingCount = await offlineSync.getPendingSyncCount();
+        setPendingSyncCount(pendingCount);
+        
         toast({
           title: "Back Online",
           description: "All changes have been synchronized",
@@ -204,9 +211,9 @@ function App() {
       window.removeEventListener('online', handleOnline);
       window.removeEventListener('offline', handleOffline);
     };
-  }, [offlineSync, fetchUserData, session]);
+  }, [offlineSync, fetchUserData, session, toast]);
 
-  // Updated filteredData to handle array of selected vessels
+  // Filter data
   const filteredData = React.useMemo(() => {
     return data.filter(defect => {
       const matchesVessel = currentVessel.length === 0 || currentVessel.includes(defect.vessel_id);
@@ -220,22 +227,6 @@ function App() {
       return matchesVessel && matchesStatus && matchesCriticality && matchesSearch;
     });
   }, [data, currentVessel, statusFilter, criticalityFilter, searchTerm]);
-
-  // PDF Generation handler
-  const handleGeneratePdf = useCallback(async () => {
-    setIsPdfGenerating(true);
-    try {
-      await new Promise(resolve => setTimeout(resolve, 1000));
-    } catch (error) {
-      toast({
-        title: "Error",
-        description: "Failed to generate PDF. Please try again.",
-        variant: "destructive",
-      });
-    } finally {
-      setIsPdfGenerating(false);
-    }
-  }, [toast]);
 
   // Handle adding new defect
   const handleAddDefect = () => {
@@ -263,7 +254,7 @@ function App() {
     setIsDefectDialogOpen(true);
   };
 
-  // Modified save defect handler with offline support
+  // Handle saving defect
   const handleSaveDefect = async (updatedDefect) => {
     try {
       if (!assignedVessels.includes(updatedDefect.vessel_id)) {
@@ -275,10 +266,8 @@ function App() {
         vessel_name: vesselNames[updatedDefect.vessel_id]
       };
 
-      // Use offline sync manager to save defect
       const savedDefect = await offlineSync.saveDefect(defectData);
 
-      // Update local state
       setData(prevData => {
         const isNew = !prevData.find(d => d.id === savedDefect.id);
         if (isNew) {
@@ -288,7 +277,6 @@ function App() {
           .sort((a, b) => new Date(b['Date Reported']) - new Date(a['Date Reported']));
       });
 
-      // Update pending sync count if offline
       if (!navigator.onLine) {
         const pendingCount = await offlineSync.getPendingSyncCount();
         setPendingSyncCount(pendingCount);
@@ -318,7 +306,6 @@ function App() {
     try {
       const { error } = await supabase.auth.signOut();
       if (error) throw error;
-      // Clear offline data on logout
       await offlineSync.clearAll();
     } catch (error) {
       console.error("Error logging out:", error);
@@ -330,7 +317,23 @@ function App() {
     }
   };
 
-  // Get vessel name for ChatBot, handling multiple selections
+  // PDF Generation handler
+  const handleGeneratePdf = useCallback(async () => {
+    setIsPdfGenerating(true);
+    try {
+      await new Promise(resolve => setTimeout(resolve, 1000));
+    } catch (error) {
+      toast({
+        title: "Error",
+        description: "Failed to generate PDF. Please try again.",
+        variant: "destructive",
+      });
+    } finally {
+      setIsPdfGenerating(false);
+    }
+  }, [toast]);
+
+  // Get vessel name for ChatBot
   const getSelectedVesselsDisplay = () => {
     if (currentVessel.length === 0) return 'All Vessels';
     if (currentVessel.length === 1) {
@@ -338,14 +341,6 @@ function App() {
     }
     return `${currentVessel.length} Vessels Selected`;
   };
-
-  if (isInitialLoad) {
-    return (
-      <div className="min-h-screen bg-[#0B1623] flex items-center justify-center">
-        <div className="text-white">Loading Defect Manager...</div>
-      </div>
-    );
-  }
 
   return (
     <ToastProvider>
@@ -358,14 +353,14 @@ function App() {
         )}
         
         {isSyncing && (
-          <AlertDialog open={true}>
-            <AlertDialogContent className="bg-background text-white">
+          <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
+            <div className="bg-background p-4 rounded-lg shadow-lg">
               <div className="flex items-center gap-2">
                 <div className="animate-spin rounded-full h-4 w-4 border-2 border-white border-t-transparent" />
-                <span>Syncing changes...</span>
+                <span className="text-white">Syncing changes...</span>
               </div>
-            </AlertDialogContent>
-          </AlertDialog>
+            </div>
+          </div>
         )}
 
         {session ? (
