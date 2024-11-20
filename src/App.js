@@ -76,20 +76,45 @@ function App() {
   const [isSyncing, setIsSyncing] = useState(false);
   const [pendingSyncCount, setPendingSyncCount] = useState(0);
 
-  // Load data function
-  const loadData = async (userId) => {
+  // First, add these utility functions at the top level of your App.js, after imports
+const withTimeout = (promise, timeout = 10000) => {
+  return Promise.race([
+    promise,
+    new Promise((_, reject) => 
+      setTimeout(() => reject(new Error('Operation timed out')), timeout)
+    )
+  ]);
+};
+
+const retryOperation = async (operation, maxRetries = 3) => {
+  for (let attempt = 0; attempt < maxRetries; attempt++) {
+    try {
+      return await operation();
+    } catch (error) {
+      console.error(`Attempt ${attempt + 1} failed:`, error);
+      if (attempt === maxRetries - 1) throw error;
+      const delay = 1000 * Math.pow(2, attempt); // Exponential backoff
+      await new Promise(resolve => setTimeout(resolve, delay));
+    }
+  }
+};
+
+// Then replace your loadData function with this improved version
+const loadData = async (userId) => {
+  return retryOperation(async () => {
     try {
       setLoading(true);
       setIsDataLoading(true);
 
       // First try to get cached data
-      let cachedDefects = await offlineSync.getDefects();
+      let cachedDefects = await withTimeout(offlineSync.getDefects(), 5000);
       if (cachedDefects?.length) {
         setData(cachedDefects);
+        console.log('Loaded cached data:', cachedDefects.length, 'records');
       }
 
-      // Fetch vessels
-      const { data: userVessels, error: vesselError } = await supabase
+      // Fetch vessels with timeout
+      const vesselPromise = supabase
         .from('user_vessels')
         .select(`
           vessel_id,
@@ -97,7 +122,15 @@ function App() {
         `)
         .eq('user_id', userId);
 
-      if (vesselError) throw vesselError;
+      const { data: userVessels, error: vesselError } = await withTimeout(vesselPromise, 10000);
+
+      if (vesselError) {
+        throw new Error(`Failed to fetch vessels: ${vesselError.message}`);
+      }
+
+      if (!userVessels || userVessels.length === 0) {
+        console.warn('No vessels found for user:', userId);
+      }
 
       const vesselIds = userVessels.map(v => v.vessel_id);
       const vesselsMap = userVessels.reduce((acc, v) => {
@@ -110,34 +143,80 @@ function App() {
       setAssignedVessels(vesselIds);
       setVesselNames(vesselsMap);
 
-      if (navigator.onLine) {
-        const { data: defects, error: defectsError } = await supabase
+      // If online, fetch fresh defects
+      if (navigator.onLine && vesselIds.length > 0) {
+        const defectsPromise = supabase
           .from('defects register')
           .select('*')
           .in('vessel_id', vesselIds)
           .order('Date Reported', { ascending: false });
 
-        if (defectsError) throw defectsError;
+        const { data: defects, error: defectsError } = await withTimeout(defectsPromise, 15000);
+
+        if (defectsError) {
+          throw new Error(`Failed to fetch defects: ${defectsError.message}`);
+        }
 
         if (defects) {
-          await offlineSync.storeData(defects);
+          // Add localId to defects before storing
+          const defectsWithLocalId = defects.map(defect => ({
+            ...defect,
+            localId: `server_${defect.id}`
+          }));
+
+          // Store in IndexedDB
+          await withTimeout(offlineSync.storeData(defectsWithLocalId), 5000);
+          console.log('Stored', defectsWithLocalId.length, 'defects in IndexedDB');
+          
           setData(defects);
+        }
+      } else if (!navigator.onLine) {
+        console.log('Offline mode - using cached data');
+        // If offline and no cached data, try one more time
+        if (!cachedDefects?.length) {
+          cachedDefects = await withTimeout(offlineSync.getDefects(), 5000);
+          if (cachedDefects?.length) {
+            console.log('Retrieved backup cached data:', cachedDefects.length, 'records');
+            setData(cachedDefects);
+          }
         }
       }
 
+      // Update pending sync count if offline
+      if (!navigator.onLine) {
+        const pendingCount = await withTimeout(offlineSync.getPendingSyncCount(), 3000);
+        setPendingSyncCount(pendingCount);
+      }
+
     } catch (error) {
-      console.error('Error loading data:', error);
-      toast({
-        title: "Error",
-        description: "Failed to load data. Please try again.",
-        variant: "destructive",
-      });
+      console.error('Error in loadData:', error);
+      // Show different toast messages based on error type
+      if (error.message.includes('timeout')) {
+        toast({
+          title: "Connection Timeout",
+          description: "The operation took too long. Please check your connection.",
+          variant: "destructive",
+        });
+      } else if (!navigator.onLine) {
+        toast({
+          title: "Offline Mode",
+          description: "Loading from cached data. Some features may be limited.",
+        });
+      } else {
+        toast({
+          title: "Error Loading Data",
+          description: "Failed to load some data. Please try again.",
+          variant: "destructive",
+        });
+      }
+      throw error; // Propagate error for retry mechanism
     } finally {
       setLoading(false);
       setIsDataLoading(false);
       setDataInitialized(true);
     }
-  };
+  });
+};
 
   // Initialize app
   useEffect(() => {
