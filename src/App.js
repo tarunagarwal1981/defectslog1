@@ -13,6 +13,9 @@ import OfflineSync from './services/OfflineSync';
 import { clearAppCache } from './index';
 import InstallPWA from './components/InstallPWA';
 
+const [isAuthChecking, setIsAuthChecking] = useState(true);
+const [isDataLoading, setIsDataLoading] = useState(true);
+
 // Utility function for fetching user's vessels
 const getUserVessels = async (userId) => {
   try {
@@ -67,82 +70,95 @@ function App() {
 
   // Load data function
   const loadData = async (userId) => {
-    try {
-      setLoading(true);
-
-      // First try to get cached data
-      let cachedDefects = await offlineSync.getDefects();
-      if (cachedDefects?.length) {
-        setData(cachedDefects);
-      }
-
-      // Fetch vessels
-      const { data: userVessels, error: vesselError } = await supabase
-        .from('user_vessels')
-        .select(`
-          vessel_id,
-          vessels!inner(vessel_id, vessel_name)
-        `)
-        .eq('user_id', userId);
-
-      if (vesselError) throw vesselError;
-
-      const vesselIds = userVessels.map(v => v.vessel_id);
-      const vesselsMap = userVessels.reduce((acc, v) => {
-        if (v.vessels) {
-          acc[v.vessel_id] = v.vessels.vessel_name;
-        }
-        return acc;
-      }, {});
-
-      setAssignedVessels(vesselIds);
-      setVesselNames(vesselsMap);
-
-      // If online, fetch fresh defects
-      if (navigator.onLine) {
-        const { data: defects, error: defectsError } = await supabase
-          .from('defects register')
-          .select('*')
-          .in('vessel_id', vesselIds)
-          .order('Date Reported', { ascending: false });
-
-        if (defectsError) throw defectsError;
-
-        if (defects) {
-          // Update IndexedDB
-          await offlineSync.storeData(defects);
-          setData(defects);
-        }
-      }
-
-      // If we still have no data, try one more time to get cached data
-      if (!cachedDefects?.length && !navigator.onLine) {
-        cachedDefects = await offlineSync.getDefects();
+    let retryCount = 0;
+    const maxRetries = 3;
+  
+    const attemptLoad = async () => {
+      try {
+        setLoading(true);
+  
+        // First try to get cached data
+        let cachedDefects = await offlineSync.getDefects();
         if (cachedDefects?.length) {
           setData(cachedDefects);
         }
+  
+        // Fetch vessels with timeout
+        const vesselPromise = supabase
+          .from('user_vessels')
+          .select(`
+            vessel_id,
+            vessels!inner(vessel_id, vessel_name)
+          `)
+          .eq('user_id', userId);
+  
+        const vesselResult = await Promise.race([
+          vesselPromise,
+          new Promise((_, reject) => 
+            setTimeout(() => reject(new Error('Vessel fetch timeout')), 10000)
+          )
+        ]);
+  
+        if (vesselResult.error) throw vesselResult.error;
+  
+        const vesselIds = vesselResult.data.map(v => v.vessel_id);
+        const vesselsMap = vesselResult.data.reduce((acc, v) => {
+          if (v.vessels) {
+            acc[v.vessel_id] = v.vessels.vessel_name;
+          }
+          return acc;
+        }, {});
+  
+        setAssignedVessels(vesselIds);
+        setVesselNames(vesselsMap);
+  
+        // If online, fetch fresh defects
+        if (navigator.onLine) {
+          const { data: defects, error: defectsError } = await supabase
+            .from('defects register')
+            .select('*')
+            .in('vessel_id', vesselIds)
+            .order('Date Reported', { ascending: false });
+  
+          if (defectsError) throw defectsError;
+  
+          if (defects) {
+            await offlineSync.storeData(defects);
+            setData(defects);
+          }
+        }
+  
+      } catch (error) {
+        console.error(`Error loading data (attempt ${retryCount + 1}):`, error);
+        
+        if (retryCount < maxRetries) {
+          retryCount++;
+          await new Promise(resolve => setTimeout(resolve, 1000 * retryCount));
+          return attemptLoad();
+        }
+        
+        toast({
+          title: "Error",
+          description: "Failed to load data. Using cached data if available.",
+          variant: "destructive",
+        });
+      } finally {
+        setLoading(false);
       }
-
-    } catch (error) {
-      console.error('Error loading data:', error);
-      toast({
-        title: "Error",
-        description: "Failed to load data. Please try again.",
-        variant: "destructive",
-      });
-    } finally {
-      setLoading(false);
-    }
+    };
+  
+    return attemptLoad();
   };
-
   // Initialize app and auth
   useEffect(() => {
     const initializeApp = async () => {
       try {
+        setIsAuthChecking(true);
         const { data: { session } } = await supabase.auth.getSession();
         setSession(session);
         
         if (session?.user?.id) {
+          setIsDataLoading(true);
           await loadData(session.user.id);
         }
       } catch (error) {
@@ -153,14 +169,18 @@ function App() {
           variant: "destructive",
         });
       } finally {
+        setIsAuthChecking(false);
+        setIsDataLoading(false);
         setDataInitialized(true);
       }
     };
-
+  
     initializeApp();
-
+  
     const { data: { subscription } } = supabase.auth.onAuthStateChange(async (_event, session) => {
       setSession(session);
+      setIsDataLoading(true);
+      
       if (session?.user?.id) {
         await loadData(session.user.id);
       } else {
@@ -168,10 +188,12 @@ function App() {
         setAssignedVessels([]);
         setVesselNames({});
       }
+      
+      setIsDataLoading(false);
     });
 
-    return () => subscription.unsubscribe();
-  }, []);
+  return () => subscription.unsubscribe();
+}, []);
 
   // Handle online/offline status
   useEffect(() => {
@@ -492,6 +514,7 @@ function App() {
   return (
     <ToastProvider>
       <div className="min-h-screen bg-background relative">
+        {/* Offline Banner */}
         {!isOnline && (
           <div className="fixed top-0 left-0 right-0 bg-yellow-500 text-white px-4 py-2 text-center z-50">
             Working Offline 
@@ -499,6 +522,7 @@ function App() {
           </div>
         )}
         
+        {/* Syncing Overlay */}
         {isSyncing && (
           <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
             <div className="bg-background p-4 rounded-lg shadow-lg">
@@ -510,11 +534,26 @@ function App() {
           </div>
         )}
 
-        {!dataInitialized ? (
+        {isAuthChecking ? (
           <div className="min-h-screen bg-[#0B1623] flex items-center justify-center">
-            <div className="text-white">Loading Defect Manager...</div>
+            <div className="text-white">Checking authentication...</div>
           </div>
-        ) : session ? (
+        ) : !session ? (
+          <>
+            <Auth onLogin={setSession} />
+            <InstallPWA />
+          </>
+        ) : isDataLoading ? (
+          <div className="min-h-screen bg-[#0B1623] flex items-center justify-center">
+            <div className="flex flex-col items-center gap-4">
+              <div className="animate-spin rounded-full h-8 w-8 border-2 border-white border-t-transparent" />
+              <div className="text-white">Loading Defect Manager...</div>
+              {!isOnline && (
+                <div className="text-white/60 text-sm">Loading from cached data...</div>
+              )}
+            </div>
+          </div>
+        ) : (
           <>
             <Header 
               user={session.user}
@@ -575,14 +614,8 @@ function App() {
               <InstallPWA />
             </main>
           </>
-        ) : (
-          <Auth onLogin={setSession} />
         )}
-
-        {!session && <InstallPWA />}
       </div>
     </ToastProvider>
   );
-}
-
 export default App;
