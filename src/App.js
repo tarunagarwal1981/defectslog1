@@ -10,6 +10,7 @@ import DefectDialog from './components/DefectDialog';
 import ChatBot from './components/ChatBot/ChatBot';
 import { supabase } from './supabaseClient';
 import OfflineSync from './services/OfflineSync';
+import { clearAppCache } from './index';
 
 // Utility function for fetching user's vessels
 const getUserVessels = async (userId) => {
@@ -459,20 +460,36 @@ const handleSaveDefect = async (updatedDefect) => {
 };
   
   const handleLogout = async () => {
-    try {
-      const { error } = await supabase.auth.signOut();
-      if (error) throw error;
-      await offlineSync.clearAll();
-    } catch (error) {
-      console.error("Error logging out:", error);
-      toast({
-        title: "Error",
-        description: error.message,
-        variant: "destructive",
-      });
-    }
-  };
-
+  try {
+    // First clear the cache
+    await clearAppCache();
+    
+    // Then proceed with logout
+    const { error } = await supabase.auth.signOut();
+    if (error) throw error;
+    
+    // Clear offline data
+    await offlineSync.clearAll();
+    
+    // Clear all state
+    setData([]);
+    setAssignedVessels([]);
+    setVesselNames({});
+    setCurrentVessel([]);
+    
+    toast({
+      title: "Logged Out",
+      description: "Successfully logged out and cleared cache",
+    });
+  } catch (error) {
+    console.error("Error during logout:", error);
+    toast({
+      title: "Error",
+      description: error.message || "Failed to logout properly",
+      variant: "destructive",
+    });
+  }
+};
   // PDF Generation handler
   const handleGeneratePdf = useCallback(async () => {
     setIsPdfGenerating(true);
