@@ -232,7 +232,109 @@ function App() {
       return matchesVessel && matchesStatus && matchesCriticality && matchesSearch;
     });
   }, [data, currentVessel, statusFilter, criticalityFilter, searchTerm]);
+  // Restore fetchUserData callback
+  const fetchUserData = useCallback(async () => {
+    if (!session?.user?.id) return;
 
+    try {
+      setLoading(true);
+      
+      // Get user's vessels with names
+      const userVessels = await getUserVessels(session.user.id);
+      
+      const vesselIds = userVessels.map(v => v.vessel_id);
+      const vesselsMap = userVessels.reduce((acc, v) => {
+        if (v.vessels) {
+          acc[v.vessel_id] = v.vessels.vessel_name;
+        }
+        return acc;
+      }, {});
+
+      // Fetch defects for assigned vessels
+      const { data: defects, error: defectsError } = await supabase
+        .from('defects register')
+        .select('*')
+        .in('vessel_id', vesselIds)
+        .order('Date Reported', { ascending: false });
+
+      if (defectsError) throw defectsError;
+
+      // Store fetched data in IndexedDB
+      if (defects) {
+        // Add localId to each defect before storing
+        const defectsWithLocalId = defects.map(defect => ({
+          ...defect,
+          localId: `server_${defect.id}`
+        }));
+        await offlineSync.storeData(defectsWithLocalId);
+      }
+
+      setAssignedVessels(vesselIds);
+      setVesselNames(vesselsMap);
+      setData(defects || []);
+      
+    } catch (error) {
+      console.error("Error fetching data:", error);
+      toast({
+        title: "Error",
+        description: error.message,
+        variant: "destructive",
+      });
+    } finally {
+      setLoading(false);
+    }
+  }, [session?.user?.id, toast, offlineSync]);
+
+  // Restore initializeData effect
+  useEffect(() => {
+    const initializeData = async () => {
+      if (!session?.user) {
+        setData([]);
+        setAssignedVessels([]);
+        setVesselNames({});
+        return;
+      }
+
+      try {
+        // Try to load cached data first
+        const cachedDefects = await offlineSync.getDefects();
+        if (cachedDefects?.length) {
+          setData(cachedDefects);
+        }
+
+        // If online, fetch fresh data
+        if (navigator.onLine) {
+          await fetchUserData();
+        }
+
+        // Update pending sync count
+        const pendingCount = await offlineSync.getPendingSyncCount();
+        setPendingSyncCount(pendingCount);
+
+      } catch (error) {
+        console.error('Error initializing data:', error);
+        toast({
+          title: "Error",
+          description: "Some data may not be available offline",
+          variant: "destructive",
+        });
+      }
+    };
+
+    initializeData();
+  }, [session?.user, fetchUserData, offlineSync]);
+
+  // Restore online refresh effect
+  useEffect(() => {
+    const handleOnline = async () => {
+      if (session?.user?.id) {
+        await loadData(session.user.id);
+      }
+    };
+
+    window.addEventListener('online', handleOnline);
+    return () => window.removeEventListener('online', handleOnline);
+  }, [session]);
   // Handle adding new defect
   const handleAddDefect = () => {
     if (assignedVessels.length === 0) {
