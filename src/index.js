@@ -3,47 +3,48 @@ import ReactDOM from 'react-dom/client';
 import './index.css';
 import App from './App';
 
-// Store the install prompt event for later use
-let deferredPrompt;
-
-window.addEventListener('beforeinstallprompt', (e) => {
-  // Prevent Chrome 67 and earlier from automatically showing the prompt
-  e.preventDefault();
-  // Stash the event so it can be triggered later
-  deferredPrompt = e;
-  // Optionally, send the event to your App component
-  document.dispatchEvent(new CustomEvent('installAvailable'));
-});
-
-// Service Worker Registration
+// Service Worker Registration with better error handling and update management
 if ('serviceWorker' in navigator) {
-  window.addEventListener('load', () => {
-    navigator.serviceWorker
-      .register('/service-worker.js')
-      .then(registration => {
-        console.log('ServiceWorker registered:', registration);
-
-        registration.addEventListener('updatefound', () => {
-          const newWorker = registration.installing;
-          newWorker.addEventListener('statechange', () => {
-            if (newWorker.state === 'installed' && navigator.serviceWorker.controller) {
-              if (window.confirm('A new version of the app is available. Would you like to update?')) {
-                registration.waiting.postMessage('skipWaiting');
-                window.location.reload();
-              }
-            }
-          });
-        });
-
-        setInterval(() => {
-          registration.update();
-        }, 1000 * 60 * 60);
-      })
-      .catch(error => {
-        console.error('ServiceWorker registration failed:', error);
+  window.addEventListener('load', async () => {
+    try {
+      const registration = await navigator.serviceWorker.register('/service-worker.js', {
+        updateViaCache: 'none' // Prevent caching of service worker
       });
+
+      console.log('ServiceWorker registered:', registration.scope);
+
+      // Handle updates
+      registration.addEventListener('updatefound', () => {
+        const newWorker = registration.installing;
+        
+        newWorker.addEventListener('statechange', () => {
+          if (newWorker.state === 'installed' && navigator.serviceWorker.controller) {
+            // Show update notification
+            const updateConfirmed = window.confirm(
+              'A new version of Defect Manager is available. Update now?'
+            );
+            
+            if (updateConfirmed) {
+              // Send skip waiting message
+              newWorker.postMessage({ type: 'SKIP_WAITING' });
+              // Reload all tabs after update
+              window.location.reload();
+            }
+          }
+        });
+      });
+
+      // Check for updates periodically
+      setInterval(() => {
+        registration.update();
+      }, 1000 * 60 * 60); // Check every hour
+
+    } catch (error) {
+      console.error('ServiceWorker registration failed:', error);
+    }
   });
 
+  // Handle page reload when service worker updates
   let refreshing = false;
   navigator.serviceWorker.addEventListener('controllerchange', () => {
     if (!refreshing) {
@@ -53,52 +54,54 @@ if ('serviceWorker' in navigator) {
   });
 }
 
-// Export function to show install prompt
-export const showInstallPrompt = async () => {
-  if (deferredPrompt) {
-    try {
-      // Show the prompt
-      await deferredPrompt.prompt();
-      // Wait for the user to respond to the prompt
-      const { outcome } = await deferredPrompt.userChoice;
-      console.log(`User response to install prompt: ${outcome}`);
-      // Clear the deferredPrompt
-      deferredPrompt = null;
-      return outcome;
-    } catch (error) {
-      console.error('Error showing install prompt:', error);
-      return 'error';
-    }
-  }
-  return 'unavailable';
-};
-
-// Check if app is installed
-export const isAppInstalled = () => {
-  return window.matchMedia('(display-mode: standalone)').matches ||
-         window.navigator.standalone === true;
-};
-
-// Clear cache helper
+// Cache management utility
 export const clearAppCache = async () => {
   if ('caches' in window) {
     try {
-      const cacheNames = await caches.keys();
+      const cacheKeys = await caches.keys();
       await Promise.all(
-        cacheNames.map(cacheName => caches.delete(cacheName))
+        cacheKeys.map(key => caches.delete(key))
       );
-      console.log('App cache cleared successfully');
+      console.log('Cache cleared successfully');
       return true;
     } catch (error) {
-      console.error('Error clearing app cache:', error);
+      console.error('Failed to clear cache:', error);
       return false;
     }
   }
   return false;
 };
 
+// Handle network status
+window.addEventListener('online', () => {
+  document.dispatchEvent(new CustomEvent('app-online'));
+});
+
+window.addEventListener('offline', () => {
+  document.dispatchEvent(new CustomEvent('app-offline'));
+});
+
+// Create and render root
 const root = ReactDOM.createRoot(document.getElementById('root'));
 
+// Development logging
+if (process.env.NODE_ENV === 'development') {
+  // Log PWA status
+  if ('serviceWorker' in navigator) {
+    navigator.serviceWorker.getRegistrations().then(registrations => {
+      console.log('Active service workers:', registrations.length);
+    });
+  }
+
+  // Log storage usage
+  if ('storage' in navigator && 'estimate' in navigator.estimate) {
+    navigator.storage.estimate().then(({ usage, quota }) => {
+      console.log(`Using ${Math.round(usage / 1024 / 1024)}MB of ${Math.round(quota / 1024 / 1024)}MB`);
+    });
+  }
+}
+
+// Render app with loading fallback
 root.render(
   <React.StrictMode>
     <React.Suspense fallback={
