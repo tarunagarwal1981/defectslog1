@@ -12,7 +12,7 @@ import { supabase } from './supabaseClient';
 import OfflineSync from './services/OfflineSync';
 import { clearAppCache } from './index';
 import InstallPWA from './components/InstallPWA';
-import React from 'react';
+
 
 // Utility function for fetching user's vessels
 const getUserVessels = async (userId) => {
