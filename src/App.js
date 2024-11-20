@@ -11,6 +11,8 @@ import ChatBot from './components/ChatBot/ChatBot';
 import { supabase } from './supabaseClient';
 import OfflineSync from './services/OfflineSync';
 import { clearAppCache } from './index';
+import InstallPWA from './components/InstallPWA';
+import React from 'react';
 
 // Utility function for fetching user's vessels
 const getUserVessels = async (userId) => {
@@ -517,7 +519,7 @@ const handleSaveDefect = async (updatedDefect) => {
 
   return (
     <ToastProvider>
-      <div className="min-h-screen bg-background">
+      <div className="min-h-screen bg-background relative">
         {!isOnline && (
           <div className="fixed top-0 left-0 right-0 bg-yellow-500 text-white px-4 py-2 text-center z-50">
             Working Offline 
@@ -536,7 +538,11 @@ const handleSaveDefect = async (updatedDefect) => {
           </div>
         )}
 
-        {session ? (
+        {!dataInitialized ? (
+          <div className="min-h-screen bg-[#0B1623] flex items-center justify-center">
+            <div className="text-white">Loading Defect Manager...</div>
+          </div>
+        ) : session ? (
           <>
             <Header 
               user={session.user}
@@ -594,13 +600,18 @@ const handleSaveDefect = async (updatedDefect) => {
                 onGeneratePdf={handleGeneratePdf}
               />
             </main>
+
+            {/* Add InstallPWA component */}
+            <InstallPWA />
           </>
         ) : (
           <Auth onLogin={setSession} />
         )}
+
+        {/* Render InstallPWA outside the auth check if you want it available before login */}
+        {!session && <InstallPWA />}
       </div>
     </ToastProvider>
   );
-}
 
 export default App;
