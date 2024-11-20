@@ -13,7 +13,6 @@ import OfflineSync from './services/OfflineSync';
 import { clearAppCache } from './index';
 import InstallPWA from './components/InstallPWA';
 
-
 // Utility function for fetching user's vessels
 const getUserVessels = async (userId) => {
   try {
@@ -66,222 +65,113 @@ function App() {
   const [isSyncing, setIsSyncing] = useState(false);
   const [pendingSyncCount, setPendingSyncCount] = useState(0);
 
-  // Initialize auth listener
-  // Replace your useEffect and loadData implementations with these:
-
-useEffect(() => {
-  const initializeApp = async () => {
+  // Load data function
+  const loadData = async (userId) => {
     try {
-      const { data: { session } } = await supabase.auth.getSession();
-      setSession(session);
-      
-      if (session?.user?.id) {
-        // Load data immediately after auth
-        await loadData(session.user.id);
+      setLoading(true);
+
+      // First try to get cached data
+      let cachedDefects = await offlineSync.getDefects();
+      if (cachedDefects?.length) {
+        setData(cachedDefects);
       }
+
+      // Fetch vessels
+      const { data: userVessels, error: vesselError } = await supabase
+        .from('user_vessels')
+        .select(`
+          vessel_id,
+          vessels!inner(vessel_id, vessel_name)
+        `)
+        .eq('user_id', userId);
+
+      if (vesselError) throw vesselError;
+
+      const vesselIds = userVessels.map(v => v.vessel_id);
+      const vesselsMap = userVessels.reduce((acc, v) => {
+        if (v.vessels) {
+          acc[v.vessel_id] = v.vessels.vessel_name;
+        }
+        return acc;
+      }, {});
+
+      setAssignedVessels(vesselIds);
+      setVesselNames(vesselsMap);
+
+      // If online, fetch fresh defects
+      if (navigator.onLine) {
+        const { data: defects, error: defectsError } = await supabase
+          .from('defects register')
+          .select('*')
+          .in('vessel_id', vesselIds)
+          .order('Date Reported', { ascending: false });
+
+        if (defectsError) throw defectsError;
+
+        if (defects) {
+          // Update IndexedDB
+          await offlineSync.storeData(defects);
+          setData(defects);
+        }
+      }
+
+      // If we still have no data, try one more time to get cached data
+      if (!cachedDefects?.length && !navigator.onLine) {
+        cachedDefects = await offlineSync.getDefects();
+        if (cachedDefects?.length) {
+          setData(cachedDefects);
+        }
+      }
+
     } catch (error) {
-      console.error('Error initializing app:', error);
+      console.error('Error loading data:', error);
       toast({
         title: "Error",
-        description: "Failed to initialize application",
+        description: "Failed to load data. Please try again.",
         variant: "destructive",
       });
     } finally {
-      setDataInitialized(true);
+      setLoading(false);
     }
   };
 
-  initializeApp();
-
-  // Auth subscription
-  const { data: { subscription } } = supabase.auth.onAuthStateChange(async (_event, session) => {
-    setSession(session);
-    if (session?.user?.id) {
-      await loadData(session.user.id);
-    } else {
-      // Clear data when logged out
-      setData([]);
-      setAssignedVessels([]);
-      setVesselNames({});
-    }
-  });
-
-  return () => subscription.unsubscribe();
-}, []); // Empty dependency array
-
-const loadData = async (userId) => {
-  try {
-    setLoading(true);
-
-    // First try to get cached data
-    let cachedDefects = await offlineSync.getDefects();
-    if (cachedDefects?.length) {
-      setData(cachedDefects);
-    }
-
-    // Fetch vessels
-    const { data: userVessels, error: vesselError } = await supabase
-      .from('user_vessels')
-      .select(`
-        vessel_id,
-        vessels!inner(vessel_id, vessel_name)
-      `)
-      .eq('user_id', userId);
-
-    if (vesselError) throw vesselError;
-
-    const vesselIds = userVessels.map(v => v.vessel_id);
-    const vesselsMap = userVessels.reduce((acc, v) => {
-      if (v.vessels) {
-        acc[v.vessel_id] = v.vessels.vessel_name;
+  // Initialize app and auth
+  useEffect(() => {
+    const initializeApp = async () => {
+      try {
+        const { data: { session } } = await supabase.auth.getSession();
+        setSession(session);
+        
+        if (session?.user?.id) {
+          await loadData(session.user.id);
+        }
+      } catch (error) {
+        console.error('Error initializing app:', error);
+        toast({
+          title: "Error",
+          description: "Failed to initialize application",
+          variant: "destructive",
+        });
+      } finally {
+        setDataInitialized(true);
       }
-      return acc;
-    }, {});
+    };
 
-    setAssignedVessels(vesselIds);
-    setVesselNames(vesselsMap);
+    initializeApp();
 
-    // If online, fetch fresh defects
-    if (navigator.onLine) {
-      const { data: defects, error: defectsError } = await supabase
-        .from('defects register')
-        .select('*')
-        .in('vessel_id', vesselIds)
-        .order('Date Reported', { ascending: false });
-
-      if (defectsError) throw defectsError;
-
-      if (defects) {
-        // Update IndexedDB
-        await offlineSync.storeData(defects);
-        setData(defects);
+    const { data: { subscription } } = supabase.auth.onAuthStateChange(async (_event, session) => {
+      setSession(session);
+      if (session?.user?.id) {
+        await loadData(session.user.id);
+      } else {
+        setData([]);
+        setAssignedVessels([]);
+        setVesselNames({});
       }
-    }
-
-    // If we still have no data, try one more time to get cached data
-    if (!cachedDefects?.length && !navigator.onLine) {
-      cachedDefects = await offlineSync.getDefects();
-      if (cachedDefects?.length) {
-        setData(cachedDefects);
-      }
-    }
-
-  } catch (error) {
-    console.error('Error loading data:', error);
-    toast({
-      title: "Error",
-      description: "Failed to load data. Please try again.",
-      variant: "destructive",
     });
-  } finally {
-    setLoading(false);
-  }
-};
 
-// Add this useEffect for data refresh on reconnect
-useEffect(() => {
-  const handleOnline = async () => {
-    if (session?.user?.id) {
-      await loadData(session.user.id);
-    }
-  };
-
-  window.addEventListener('online', handleOnline);
-  return () => window.removeEventListener('online', handleOnline);
-}, [session]);
-  
-  // Fetch user data
-
-const fetchUserData = useCallback(async () => {
-  if (!session?.user?.id) return;
-
-  try {
-    setLoading(true);
-    
-    // Get user's vessels with names
-    const userVessels = await getUserVessels(session.user.id);
-    
-    const vesselIds = userVessels.map(v => v.vessel_id);
-    const vesselsMap = userVessels.reduce((acc, v) => {
-      if (v.vessels) {
-        acc[v.vessel_id] = v.vessels.vessel_name;
-      }
-      return acc;
-    }, {});
-
-    // Fetch defects for assigned vessels
-    const { data: defects, error: defectsError } = await supabase
-      .from('defects register')
-      .select('*')
-      .in('vessel_id', vesselIds)
-      .order('Date Reported', { ascending: false });
-
-    if (defectsError) throw defectsError;
-
-    // Store fetched data in IndexedDB
-    if (defects) {
-      // Add localId to each defect before storing
-      const defectsWithLocalId = defects.map(defect => ({
-        ...defect,
-        localId: `server_${defect.id}`
-      }));
-      await offlineSync.storeData(defectsWithLocalId);
-    }
-
-    setAssignedVessels(vesselIds);
-    setVesselNames(vesselsMap);
-    setData(defects || []);
-    
-  } catch (error) {
-    console.error("Error fetching data:", error);
-    toast({
-      title: "Error",
-      description: error.message,
-      variant: "destructive",
-    });
-  } finally {
-    setLoading(false);
-  }
-}, [session?.user?.id, toast, offlineSync]);
-
-  // Load initial data and handle offline
-useEffect(() => {
-  const initializeData = async () => {
-    if (!session?.user) {
-      setData([]);
-      setAssignedVessels([]);
-      setVesselNames({});
-      return;
-    }
-
-    try {
-      // Try to load cached data first
-      const cachedDefects = await offlineSync.getDefects();
-      if (cachedDefects?.length) {
-        setData(cachedDefects);
-      }
-
-      // If online, fetch fresh data
-      if (navigator.onLine) {
-        await fetchUserData();
-      }
-
-      // Update pending sync count
-      const pendingCount = await offlineSync.getPendingSyncCount();
-      setPendingSyncCount(pendingCount);
-
-    } catch (error) {
-      console.error('Error initializing data:', error);
-      toast({
-        title: "Error",
-        description: "Some data may not be available offline",
-        variant: "destructive",
-      });
-    }
-  };
-
-  initializeData();
-}, [session?.user, fetchUserData, offlineSync]);
+    return () => subscription.unsubscribe();
+  }, []);
 
   // Handle online/offline status
   useEffect(() => {
@@ -291,7 +181,7 @@ useEffect(() => {
       try {
         await offlineSync.syncWithServer();
         if (session?.user) {
-          await fetchUserData();
+          await loadData(session.user.id);
         }
         const pendingCount = await offlineSync.getPendingSyncCount();
         setPendingSyncCount(pendingCount);
@@ -326,7 +216,7 @@ useEffect(() => {
       window.removeEventListener('online', handleOnline);
       window.removeEventListener('offline', handleOffline);
     };
-  }, [offlineSync, fetchUserData, session, toast]);
+  }, [offlineSync, session, toast]);
 
   // Filter data
   const filteredData = React.useMemo(() => {
@@ -370,129 +260,109 @@ useEffect(() => {
   };
 
   // Handle saving defect
- 
-
-const handleSaveDefect = async (updatedDefect) => {
-  try {
-    if (!assignedVessels.includes(updatedDefect.vessel_id)) {
-      throw new Error("Not authorized for this vessel");
-    }
-
-    const isNewDefect = updatedDefect.id?.startsWith('temp-');
-    
-    // Prepare data without id for new defects
-    const defectData = {
-      vessel_id: updatedDefect.vessel_id,
-      vessel_name: vesselNames[updatedDefect.vessel_id],
-      "Status (Vessel)": updatedDefect['Status (Vessel)'],
-      Equipments: updatedDefect.Equipments,
-      Description: updatedDefect.Description,
-      "Action Planned": updatedDefect['Action Planned'],
-      Criticality: updatedDefect.Criticality,
-      "Date Reported": updatedDefect['Date Reported'],
-      "Date Completed": updatedDefect['Date Completed'] || null,
-      Comments: updatedDefect.Comments || '',
-      "SNo": updatedDefect.SNo || null  // Include SNo if it exists
-    };
-
-    let savedDefect;
-
-    if (navigator.onLine) {
-      let supabaseQuery;
-      
-      if (isNewDefect) {
-        // For new defects, just insert the data without id
-        supabaseQuery = supabase
-          .from('defects register')
-          .insert([defectData])
-          .select()
-          .single();
-      } else {
-        // For updates, include the id in the query condition only
-        supabaseQuery = supabase
-          .from('defects register')
-          .update(defectData)
-          .eq('id', updatedDefect.id)
-          .select()
-          .single();
+  const handleSaveDefect = async (updatedDefect) => {
+    try {
+      if (!assignedVessels.includes(updatedDefect.vessel_id)) {
+        throw new Error("Not authorized for this vessel");
       }
 
-      const { data, error } = await supabaseQuery;
-      if (error) throw error;
-      savedDefect = data;
-
-      // Store in offline cache
-      await offlineSync.storeData(savedDefect);
-    } else {
-      // Offline handling
-      const offlineId = `offline_${Date.now()}`;
-      savedDefect = {
-        ...defectData,
-        id: isNewDefect ? offlineId : updatedDefect.id,
-        _syncStatus: 'pending'
+      const isNewDefect = updatedDefect.id?.startsWith('temp-');
+      
+      const defectData = {
+        vessel_id: updatedDefect.vessel_id,
+        vessel_name: vesselNames[updatedDefect.vessel_id],
+        "Status (Vessel)": updatedDefect['Status (Vessel)'],
+        Equipments: updatedDefect.Equipments,
+        Description: updatedDefect.Description,
+        "Action Planned": updatedDefect['Action Planned'],
+        Criticality: updatedDefect.Criticality,
+        "Date Reported": updatedDefect['Date Reported'],
+        "Date Completed": updatedDefect['Date Completed'] || null,
+        Comments: updatedDefect.Comments || '',
+        "SNo": updatedDefect.SNo || null
       };
-      await offlineSync.storeData(savedDefect);
-      setPendingSyncCount(await offlineSync.getPendingSyncCount());
+
+      let savedDefect;
+
+      if (navigator.onLine) {
+        const { data, error } = isNewDefect
+          ? await supabase
+              .from('defects register')
+              .insert([defectData])
+              .select()
+              .single()
+          : await supabase
+              .from('defects register')
+              .update(defectData)
+              .eq('id', updatedDefect.id)
+              .select()
+              .single();
+
+        if (error) throw error;
+        savedDefect = data;
+        await offlineSync.storeData(savedDefect);
+      } else {
+        savedDefect = {
+          ...defectData,
+          id: isNewDefect ? `offline_${Date.now()}` : updatedDefect.id,
+          _syncStatus: 'pending'
+        };
+        await offlineSync.storeData(savedDefect);
+        setPendingSyncCount(await offlineSync.getPendingSyncCount());
+      }
+
+      setData(prevData => {
+        const newData = isNewDefect 
+          ? [savedDefect, ...prevData]
+          : prevData.map(d => d.id === savedDefect.id ? savedDefect : d);
+        return newData.sort((a, b) => new Date(b['Date Reported']) - new Date(a['Date Reported']));
+      });
+
+      setIsDefectDialogOpen(false);
+      setCurrentDefect(null);
+
+      toast({
+        title: isNewDefect ? "Defect Added" : "Defect Updated",
+        description: navigator.onLine ? "Saved successfully" : "Saved offline - will sync when online",
+      });
+
+    } catch (error) {
+      console.error("Error saving defect:", error);
+      toast({
+        title: "Error",
+        description: error.message || "Failed to save defect",
+        variant: "destructive",
+      });
     }
+  };
 
-    // Update UI state
-    setData(prevData => {
-      const newData = isNewDefect 
-        ? [savedDefect, ...prevData]
-        : prevData.map(d => d.id === savedDefect.id ? savedDefect : d);
-      return newData.sort((a, b) => new Date(b['Date Reported']) - new Date(a['Date Reported']));
-    });
-
-    setIsDefectDialogOpen(false);
-    setCurrentDefect(null);
-
-    toast({
-      title: isNewDefect ? "Defect Added" : "Defect Updated",
-      description: navigator.onLine ? "Saved successfully" : "Saved offline - will sync when online",
-    });
-
-  } catch (error) {
-    console.error("Error saving defect:", error);
-    toast({
-      title: "Error",
-      description: error.message || "Failed to save defect",
-      variant: "destructive",
-    });
-  }
-};
-  
+  // Handle logout
   const handleLogout = async () => {
-  try {
-    // First clear the cache
-    await clearAppCache();
-    
-    // Then proceed with logout
-    const { error } = await supabase.auth.signOut();
-    if (error) throw error;
-    
-    // Clear offline data
-    await offlineSync.clearAll();
-    
-    // Clear all state
-    setData([]);
-    setAssignedVessels([]);
-    setVesselNames({});
-    setCurrentVessel([]);
-    
-    toast({
-      title: "Logged Out",
-      description: "Successfully logged out and cleared cache",
-    });
-  } catch (error) {
-    console.error("Error during logout:", error);
-    toast({
-      title: "Error",
-      description: error.message || "Failed to logout properly",
-      variant: "destructive",
-    });
-  }
-};
-  // PDF Generation handler
+    try {
+      await clearAppCache();
+      const { error } = await supabase.auth.signOut();
+      if (error) throw error;
+      await offlineSync.clearAll();
+      setData([]);
+      setAssignedVessels([]);
+      setVesselNames({});
+      setCurrentVessel([]);
+      
+      toast({
+        title: "Logged Out",
+        description: "Successfully logged out and cleared cache",
+      });
+    } catch (error) {
+      console.error("Error during logout:", error);
+      toast({
+        title: "Error",
+        description: error.message || "Failed to logout properly",
+        variant: "destructive",
+      });
+    }
+  };
+
+  // Handle PDF generation
   const handleGeneratePdf = useCallback(async () => {
     setIsPdfGenerating(true);
     try {
@@ -508,7 +378,7 @@ const handleSaveDefect = async (updatedDefect) => {
     }
   }, [toast]);
 
-  // Get vessel name for ChatBot
+  // Get vessel display name
   const getSelectedVesselsDisplay = () => {
     if (currentVessel.length === 0) return 'All Vessels';
     if (currentVessel.length === 1) {
@@ -599,19 +469,18 @@ const handleSaveDefect = async (updatedDefect) => {
                 isPdfGenerating={isPdfGenerating}
                 onGeneratePdf={handleGeneratePdf}
               />
-            </main>
 
-            {/* Add InstallPWA component */}
-            <InstallPWA />
+              <InstallPWA />
+            </main>
           </>
         ) : (
           <Auth onLogin={setSession} />
         )}
 
-        {/* Render InstallPWA outside the auth check if you want it available before login */}
         {!session && <InstallPWA />}
       </div>
     </ToastProvider>
   );
+}
 
 export default App;
