@@ -13,6 +13,15 @@ import OfflineSync from './services/OfflineSync';
 import { clearAppCache } from './index';
 import InstallPWA from './components/InstallPWA';
 
+const withTimeout = (promise, timeout = 10000) => {
+  return Promise.race([
+    promise,
+    new Promise((_, reject) => 
+      setTimeout(() => reject(new Error('Operation timed out')), timeout)
+    )
+  ]);
+};
+
 // Utility function for fetching user's vessels
 const getUserVessels = async (userId) => {
   try {
@@ -132,42 +141,85 @@ function App() {
 
   // Initialize app
   useEffect(() => {
-    const initializeApp = async () => {
-      try {
-        setIsAuthChecking(true);
-        const { data: { session } } = await supabase.auth.getSession();
-        setSession(session);
-        
-        if (session?.user?.id) {
-          await loadData(session.user.id);
-        }
-      } catch (error) {
-        console.error('Error initializing app:', error);
-        toast({
-          title: "Error",
-          description: "Failed to initialize application",
-          variant: "destructive",
-        });
-      } finally {
-        setIsAuthChecking(false);
-      }
-    };
+  let mounted = true;
 
-    initializeApp();
+  const initializeApp = async () => {
+    try {
+      setIsAuthChecking(true);
 
-    const { data: { subscription } } = supabase.auth.onAuthStateChange(async (_event, session) => {
+      // Add timeout to auth check
+      const authResult = await withTimeout(supabase.auth.getSession());
+      
+      if (!mounted) return;
+      
+      const session = authResult.data.session;
       setSession(session);
+      
       if (session?.user?.id) {
+        setIsDataLoading(true);
         await loadData(session.user.id);
+      }
+    } catch (error) {
+      console.error('Error initializing app:', error);
+      // If auth check fails, reset states
+      setSession(null);
+      setData([]);
+      setAssignedVessels([]);
+      setVesselNames({});
+      
+      toast({
+        title: "Error",
+        description: "Failed to check authentication. Please refresh the page.",
+        variant: "destructive",
+      });
+    } finally {
+      if (mounted) {
+        setIsAuthChecking(false);
+        setIsDataLoading(false);
+        setDataInitialized(true);
+      }
+    }
+  };
+
+  initializeApp();
+
+  // Auth state subscription with timeout
+  const { data: { subscription } } = supabase.auth.onAuthStateChange(async (_event, session) => {
+    if (!mounted) return;
+    
+    try {
+      setIsAuthChecking(true);
+      setSession(session);
+
+      if (session?.user?.id) {
+        setIsDataLoading(true);
+        await withTimeout(loadData(session.user.id));
       } else {
         setData([]);
         setAssignedVessels([]);
         setVesselNames({});
       }
-    });
+    } catch (error) {
+      console.error('Error in auth state change:', error);
+      toast({
+        title: "Error",
+        description: "Failed to update session. Please refresh the page.",
+        variant: "destructive",
+      });
+    } finally {
+      if (mounted) {
+        setIsAuthChecking(false);
+        setIsDataLoading(false);
+      }
+    }
+  });
 
-    return () => subscription.unsubscribe();
-  }, []);
+  return () => {
+    mounted = false;
+    subscription.unsubscribe();
+  };
+}, [toast]);
+
 
   // Fetch user data
   const fetchUserData = useCallback(async () => {
@@ -455,7 +507,16 @@ function App() {
 
         {isAuthChecking ? (
           <div className="min-h-screen bg-[#0B1623] flex items-center justify-center">
-            <div className="text-white">Checking authentication...</div>
+            <div className="flex flex-col items-center gap-4">
+              <div className="animate-spin rounded-full h-8 w-8 border-2 border-white border-t-transparent" />
+              <div className="text-white">Checking authentication...</div>
+              <button 
+                onClick={() => window.location.reload()}
+                className="mt-4 px-4 py-2 bg-[#3BADE5] text-white rounded-md hover:bg-[#3BADE5]/90 text-sm"
+              >
+                Refresh Page
+              </button>
+            </div>
           </div>
         ) : !session ? (
           <>
